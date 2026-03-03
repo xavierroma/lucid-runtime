@@ -1,0 +1,179 @@
+openapi: 3.1.0
+info:
+  title: Lucid Runtime Coordinator Internal Worker API
+  version: 0.1.0
+servers:
+  - url: https://coordinator.example.com
+paths:
+  /internal/v1/worker/register:
+    post:
+      summary: Register worker availability
+      security:
+        - workerBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerIdentity'
+      responses:
+        '200':
+          description: Worker registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerStatus'
+        '400':
+          description: Unknown worker id
+        '401':
+          description: Unauthorized
+  /internal/v1/worker/heartbeat:
+    post:
+      summary: Refresh worker heartbeat
+      security:
+        - workerBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerIdentity'
+      responses:
+        '200':
+          description: Heartbeat recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerStatus'
+        '400':
+          description: Unknown worker id
+        '401':
+          description: Unauthorized
+  /internal/v1/worker/assignment:
+    get:
+      summary: Poll for pending assignment
+      security:
+        - workerBearerAuth: []
+      parameters:
+        - in: query
+          name: worker_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Assignment available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkerAssignment'
+        '204':
+          description: No assignment
+        '400':
+          description: Unknown worker id
+        '401':
+          description: Unauthorized
+        '409':
+          description: Worker unavailable
+  /internal/v1/sessions/{session_id}/running:
+    post:
+      summary: Mark assigned session as running
+      security:
+        - workerBearerAuth: []
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session marked running
+        '401':
+          description: Unauthorized
+        '404':
+          description: Session not found
+        '409':
+          description: Invalid state transition
+  /internal/v1/sessions/{session_id}/ended:
+    post:
+      summary: Mark active session ended from worker
+      security:
+        - workerBearerAuth: []
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerEndedRequest'
+      responses:
+        '200':
+          description: Session marked ended
+        '401':
+          description: Unauthorized
+        '404':
+          description: Session not found
+
+components:
+  securitySchemes:
+    workerBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Worker internal token
+  schemas:
+    WorkerIdentity:
+      type: object
+      required:
+        - worker_id
+      properties:
+        worker_id:
+          type: string
+    WorkerStatus:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    WorkerAssignment:
+      type: object
+      required:
+        - session_id
+        - room_name
+        - worker_access_token
+        - video_track_name
+        - control_topic
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        room_name:
+          type: string
+        worker_access_token:
+          type: string
+        video_track_name:
+          type: string
+        control_topic:
+          type: string
+    WorkerEndedRequest:
+      type: object
+      properties:
+        error_code:
+          type: string
+          nullable: true
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string

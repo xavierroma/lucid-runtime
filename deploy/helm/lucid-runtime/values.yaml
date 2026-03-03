@@ -11,7 +11,19 @@ coordinator:
     type: ClusterIP
     port: 8080
   command: []
-  env: []
+  env:
+    - name: API_KEY
+      value: "replace-me"
+    - name: WORKER_INTERNAL_TOKEN
+      value: "replace-me"
+    - name: LIVEKIT_API_KEY
+      value: "replace-me"
+    - name: LIVEKIT_API_SECRET
+      value: "replace-me"
+    - name: WORKER_ID
+      value: "wm-worker-1"
+    - name: HEARTBEAT_TTL_SECS
+      value: "15"
   resources: {}
 
 worker:
@@ -21,5 +33,9 @@ worker:
     tag: dev
     pullPolicy: IfNotPresent
   command: []
-  env: []
+  env:
+    - name: WORKER_ID
+      value: "wm-worker-1"
+    - name: WORKER_INTERNAL_TOKEN
+      value: "replace-me"
   resources: {}
