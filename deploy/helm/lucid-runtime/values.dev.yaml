@@ -1,0 +1,11 @@
+coordinator:
+  image:
+    repository: lucid/coordinator
+    tag: dev
+    pullPolicy: IfNotPresent
+
+worker:
+  image:
+    repository: lucid/worker
+    tag: dev
+    pullPolicy: IfNotPresent

@@ -1,0 +1,25 @@
+nameOverride: ""
+fullnameOverride: ""
+
+coordinator:
+  replicaCount: 1
+  image:
+    repository: lucid/coordinator
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  command: []
+  env: []
+  resources: {}
+
+worker:
+  replicaCount: 1
+  image:
+    repository: lucid/worker
+    tag: dev
+    pullPolicy: IfNotPresent
+  command: []
+  env: []
+  resources: {}

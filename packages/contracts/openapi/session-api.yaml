@@ -1,0 +1,102 @@
+openapi: 3.1.0
+info:
+  title: Lucid Runtime Coordinator API
+  version: 0.1.0
+servers:
+  - url: https://coordinator.example.com
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Healthy
+  /v1/sessions:
+    post:
+      summary: Create a session
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateSessionResponse'
+        '409':
+          description: Worker busy
+  /v1/sessions/{session_id}:
+    get:
+      summary: Get session state
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '404':
+          description: Not found
+  /v1/sessions/{session_id}:end:
+    post:
+      summary: End a session (idempotent)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: session_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session ended
+        '404':
+          description: Not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key
+  schemas:
+    Session:
+      type: object
+      required:
+        - session_id
+        - room_name
+        - state
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        room_name:
+          type: string
+        state:
+          type: string
+          enum: [CREATED, ASSIGNED, RUNNING, ENDED]
+        error_code:
+          type: string
+          nullable: true
+    CreateSessionResponse:
+      type: object
+      required:
+        - session
+      properties:
+        session:
+          $ref: '#/components/schemas/Session'
+        client_access_token:
+          type: string
+        worker_access_token:
+          type: string

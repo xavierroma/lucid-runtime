@@ -1,0 +1,3 @@
+[workspace]
+members = ["apps/coordinator"]
+resolver = "2"
