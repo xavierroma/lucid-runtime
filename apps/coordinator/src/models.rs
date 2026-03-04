@@ -69,4 +69,5 @@ pub struct WorkerEndedRequest {
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkerStatusResponse {
     pub status: &'static str,
+    pub cancel_active_session: bool,
 }

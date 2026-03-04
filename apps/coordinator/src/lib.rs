@@ -299,6 +299,46 @@ mod tests {
         register_worker(&app, &config).await;
         let (_, create_payload) = create_session(&app, &config).await;
 
+        let assignment = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/internal/v1/worker/assignment?worker_id={}",
+                        config.worker_id
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", config.worker_internal_token),
+                    )
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(assignment.status(), StatusCode::OK);
+
+        let running = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/internal/v1/sessions/{}/running",
+                        create_payload.session.session_id
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", config.worker_internal_token),
+                    )
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(running.status(), StatusCode::OK);
+
         let end_uri = format!("/v1/sessions/{}:end", create_payload.session.session_id);
 
         let first_end = app
@@ -328,6 +368,55 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(second_end.status(), StatusCode::OK);
+
+        let create_while_cancel_pending = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/sessions")
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_while_cancel_pending.status(), StatusCode::CONFLICT);
+
+        let worker_ack_end = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/internal/v1/sessions/{}/ended",
+                        create_payload.session.session_id
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", config.worker_internal_token),
+                    )
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(worker_ack_end.status(), StatusCode::OK);
+
+        let create_after_worker_ack = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/sessions")
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(create_after_worker_ack.status(), StatusCode::CREATED);
 
         let missing = app
             .clone()
@@ -476,6 +565,73 @@ mod tests {
 
         let get_payload = read_json(get).await;
         assert_eq!(get_payload["state"], "RUNNING");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_reports_cancel_signal_after_public_end() {
+        let (app, config) = test_app();
+        register_worker(&app, &config).await;
+        let (_, create_payload) = create_session(&app, &config).await;
+
+        let _assignment = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!(
+                        "/internal/v1/worker/assignment?worker_id={}",
+                        config.worker_id
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", config.worker_internal_token),
+                    )
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let end = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/v1/sessions/{}:end",
+                        create_payload.session.session_id
+                    ))
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(end.status(), StatusCode::OK);
+
+        let heartbeat = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/internal/v1/worker/heartbeat")
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", config.worker_internal_token),
+                    )
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "worker_id": config.worker_id }).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(heartbeat.status(), StatusCode::OK);
+
+        let payload = read_json(heartbeat).await;
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["cancel_active_session"], true);
     }
 
     #[tokio::test]

@@ -30,8 +30,14 @@ pub struct WorkerInfo {
 }
 
 #[derive(Clone, Debug)]
+struct SessionRecord {
+    session: Session,
+    cancel_requested: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct RuntimeState {
-    sessions: HashMap<Uuid, Session>,
+    sessions: HashMap<Uuid, SessionRecord>,
     active_session: Option<Uuid>,
     pub worker: WorkerInfo,
 }
@@ -82,7 +88,13 @@ impl RuntimeState {
         };
         session.state = SessionState::Assigned;
 
-        self.sessions.insert(session_id, session.clone());
+        self.sessions.insert(
+            session_id,
+            SessionRecord {
+                session: session.clone(),
+                cancel_requested: false,
+            },
+        );
         self.active_session = Some(session_id);
         self.worker.state = WorkerState::Busy;
         self.worker.pending_assignment = Some(WorkerAssignment {
@@ -102,24 +114,48 @@ impl RuntimeState {
     }
 
     pub fn get_session(&self, session_id: &Uuid) -> Option<Session> {
-        self.sessions.get(session_id).cloned()
+        self.sessions
+            .get(session_id)
+            .map(|record| record.session.clone())
+    }
+
+    pub fn request_end_session(&mut self, session_id: &Uuid) -> bool {
+        let Some(record) = self.sessions.get_mut(session_id) else {
+            return false;
+        };
+        if record.session.state != SessionState::Ended {
+            record.session.state = SessionState::Ended;
+        }
+        record.cancel_requested = true;
+
+        let pending_assignment_for_session = self
+            .worker
+            .pending_assignment
+            .as_ref()
+            .map(|assignment| assignment.session_id == *session_id)
+            .unwrap_or(false);
+        if pending_assignment_for_session {
+            self.worker.pending_assignment = None;
+            self.active_session = None;
+            self.worker.state = WorkerState::Idle;
+            record.cancel_requested = false;
+        }
+
+        true
     }
 
     pub fn end_session(&mut self, session_id: &Uuid, error_code: Option<String>) -> bool {
-        let Some(session) = self.sessions.get_mut(session_id) else {
+        let Some(record) = self.sessions.get_mut(session_id) else {
             return false;
         };
 
-        if session.state != SessionState::Ended {
-            session.state = SessionState::Ended;
-            session.error_code = error_code;
-        } else if session.error_code.is_none() {
-            session.error_code = error_code;
+        if record.session.state != SessionState::Ended {
+            record.session.state = SessionState::Ended;
+            record.session.error_code = error_code;
+        } else if record.session.error_code.is_none() {
+            record.session.error_code = error_code;
         }
-
-        if self.active_session == Some(*session_id) {
-            self.active_session = None;
-        }
+        record.cancel_requested = false;
 
         if self
             .worker
@@ -129,6 +165,10 @@ impl RuntimeState {
             .unwrap_or(false)
         {
             self.worker.pending_assignment = None;
+        }
+
+        if self.active_session == Some(*session_id) {
+            self.active_session = None;
         }
 
         self.worker.state = WorkerState::Idle;
@@ -159,14 +199,20 @@ impl RuntimeState {
         &mut self,
         worker_id: &str,
         now: Instant,
-    ) -> Result<(), WorkerOperationError> {
+    ) -> Result<bool, WorkerOperationError> {
         if !self.worker_id_matches(worker_id) {
             return Err(WorkerOperationError::UnknownWorker);
         }
 
         self.worker.registered = true;
         self.worker.last_heartbeat = Some(now);
-        Ok(())
+
+        let cancel_active_session = self
+            .active_session
+            .and_then(|session_id| self.sessions.get(&session_id))
+            .map(|record| record.cancel_requested)
+            .unwrap_or(false);
+        Ok(cancel_active_session)
     }
 
     pub fn take_assignment(
@@ -192,11 +238,13 @@ impl RuntimeState {
             return Err(SessionTransitionError::NotFound);
         };
 
-        if self.active_session != Some(*session_id) || session.state != SessionState::Assigned {
+        if self.active_session != Some(*session_id)
+            || session.session.state != SessionState::Assigned
+        {
             return Err(SessionTransitionError::InvalidState);
         }
 
-        session.state = SessionState::Running;
+        session.session.state = SessionState::Running;
         Ok(())
     }
 
@@ -219,9 +267,10 @@ impl RuntimeState {
         self.worker.state = WorkerState::Idle;
 
         if let Some(session_id) = self.active_session.take() {
-            if let Some(session) = self.sessions.get_mut(&session_id) {
-                session.state = SessionState::Ended;
-                session.error_code = Some(WORKER_DISCONNECTED_ERROR.to_string());
+            if let Some(record) = self.sessions.get_mut(&session_id) {
+                record.session.state = SessionState::Ended;
+                record.session.error_code = Some(WORKER_DISCONNECTED_ERROR.to_string());
+                record.cancel_requested = false;
             }
         }
     }

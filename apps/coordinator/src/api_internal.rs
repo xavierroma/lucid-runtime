@@ -33,7 +33,14 @@ pub async fn register_worker(
         return error_response(StatusCode::BAD_REQUEST, "unknown worker_id");
     }
 
-    (StatusCode::OK, Json(WorkerStatusResponse { status: "ok" })).into_response()
+    (
+        StatusCode::OK,
+        Json(WorkerStatusResponse {
+            status: "ok",
+            cancel_active_session: false,
+        }),
+    )
+        .into_response()
 }
 
 pub async fn heartbeat_worker(
@@ -47,11 +54,24 @@ pub async fn heartbeat_worker(
 
     let mut runtime = ctx.runtime.write().await;
     let result = runtime.heartbeat_worker(&payload.worker_id, Instant::now());
-    if let Err(WorkerOperationError::UnknownWorker) = result {
-        return error_response(StatusCode::BAD_REQUEST, "unknown worker_id");
-    }
+    let cancel_active_session = match result {
+        Ok(cancel_active_session) => cancel_active_session,
+        Err(WorkerOperationError::UnknownWorker) => {
+            return error_response(StatusCode::BAD_REQUEST, "unknown worker_id")
+        }
+        Err(WorkerOperationError::WorkerUnavailable) => {
+            return error_response(StatusCode::CONFLICT, "worker unavailable")
+        }
+    };
 
-    (StatusCode::OK, Json(WorkerStatusResponse { status: "ok" })).into_response()
+    (
+        StatusCode::OK,
+        Json(WorkerStatusResponse {
+            status: "ok",
+            cancel_active_session,
+        }),
+    )
+        .into_response()
 }
 
 pub async fn get_assignment(

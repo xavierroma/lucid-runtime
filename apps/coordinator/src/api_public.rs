@@ -112,7 +112,7 @@ pub async fn end_session(
     };
 
     let mut runtime = ctx.runtime.write().await;
-    let ended = runtime.end_session(&session_id, None);
+    let ended = runtime.request_end_session(&session_id);
     if !ended {
         return error_response(StatusCode::NOT_FOUND, "session not found");
     }

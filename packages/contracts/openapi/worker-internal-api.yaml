@@ -140,10 +140,13 @@ components:
       type: object
       required:
         - status
+        - cancel_active_session
       properties:
         status:
           type: string
           enum: [ok]
+        cancel_active_session:
+          type: boolean
     WorkerAssignment:
       type: object
       required:

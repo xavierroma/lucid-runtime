@@ -31,6 +31,8 @@ Internal API uses bearer auth:
 - Single active session invariant (`ASSIGNED`/`RUNNING` only one at a time)
 - Worker liveness tracked with heartbeat TTL
 - Missing heartbeat auto-ends active session with `WORKER_DISCONNECTED`
+- Heartbeat response includes `cancel_active_session` so worker can honor public end requests safely
+- Public end requests keep worker BUSY until worker confirms `/internal/v1/sessions/{session_id}/ended`
 
 ## Configuration
 
