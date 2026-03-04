@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lucid-runtime.dev/schemas/wm-status-v1.schema.json",
+  "title": "WM Status V1",
+  "type": "object",
+  "required": ["v", "type", "seq", "ts_ms", "payload"],
+  "properties": {
+    "v": {
+      "const": "v1"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["started", "busy", "frame_metrics", "error", "ended", "pong"]
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

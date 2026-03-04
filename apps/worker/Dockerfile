@@ -1,9 +1,25 @@
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python3.10-venv \
+    git \
+    ffmpeg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --upgrade pip setuptools wheel
 
 WORKDIR /workspace
-
 COPY apps/worker /workspace/apps/worker
 
-RUN uv sync --project /workspace/apps/worker --frozen
+RUN python3 -m pip install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
+    python3 -m pip install --no-cache-dir -e /workspace/apps/worker[livekit,yume]
 
-ENTRYPOINT ["uv", "run", "--project", "/workspace/apps/worker", "wm-worker", "--worker-id", "wm-worker-1"]
+RUN chmod +x /workspace/apps/worker/scripts/start-worker.sh
+
+ENTRYPOINT ["/workspace/apps/worker/scripts/start-worker.sh"]

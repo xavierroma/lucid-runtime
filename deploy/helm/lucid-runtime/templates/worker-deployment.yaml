@@ -7,6 +7,8 @@ metadata:
     app.kubernetes.io/component: worker
 spec:
   replicas: {{ .Values.worker.replicaCount }}
+  strategy:
+    type: {{ .Values.worker.strategy.type | default "Recreate" }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ .Release.Name }}
@@ -17,10 +19,34 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: worker
     spec:
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds | default 60 }}
+      {{- with .Values.worker.runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: worker
           image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
           imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.worker.healthPort | default 8090 }}
+              protocol: TCP
           {{- with .Values.worker.command }}
           command:
             {{- toYaml . | nindent 12 }}
@@ -29,5 +55,32 @@ spec:
           env:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - sleep {{ .Values.worker.preStopSleepSeconds | default 5 }}
+          {{- with .Values.worker.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.worker.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
+      {{- with .Values.worker.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

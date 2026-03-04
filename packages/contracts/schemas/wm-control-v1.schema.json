@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lucid-runtime.dev/schemas/wm-control-v1.schema.json",
+  "title": "WM Control V1",
+  "type": "object",
+  "required": ["v", "type", "seq", "ts_ms", "payload"],
+  "properties": {
+    "v": {
+      "const": "v1"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["action", "set_prompt", "end", "ping"]
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ts_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "payload": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "action"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "keys": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mouse_dx": {
+                "type": "number"
+              },
+              "mouse_dy": {
+                "type": "number"
+              },
+              "actual_distance": {
+                "type": "number"
+              },
+              "angular_change_rate": {
+                "type": "number"
+              },
+              "view_rotation_speed": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "set_prompt"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["prompt"],
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "end"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "ping"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "client_ts_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
