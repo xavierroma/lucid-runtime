@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
+
 import numpy as np
 
 from wm_worker.config import WorkerConfig
@@ -36,8 +35,7 @@ class YumeEngine:
         )
         self._device = "cpu"
         self._loaded = False
-        self._torch = None
-        self._gpu_generator = None
+        self._runtime = None
 
     async def load(self) -> None:
         if self._config.wm_engine not in {"fake", "yume"}:
@@ -56,18 +54,22 @@ class YumeEngine:
             raise YumeEngineError(
                 "WM_ENGINE=yume requires torch; install wm-worker[yume]"
             ) from exc
-        self._torch = torch
+        if not torch.cuda.is_available():
+            raise YumeEngineError("CUDA is required for WM_ENGINE=yume")
 
         if not self._config.yume_model_dir.exists():
             raise YumeEngineError(
                 f"YUME_MODEL_DIR does not exist: {self._config.yume_model_dir}"
             )
 
-        # "yume" mode keeps the shape of a GPU runtime and enforces model files.
         required_files = [
             "diffusion_pytorch_model.safetensors",
+            "config.json",
             "config.yaml",
             "Wan2.2_VAE.pth",
+            "models_t5_umt5-xxl-enc-bf16.pth",
+            "google/umt5-xxl/tokenizer.json",
+            "google/umt5-xxl/spiece.model",
         ]
         missing = [
             file_name
@@ -79,11 +81,29 @@ class YumeEngine:
                 f"YUME model directory is missing required files: {', '.join(missing)}"
             )
 
-        if not torch.cuda.is_available():
-            raise YumeEngineError("CUDA is required for WM_ENGINE=yume")
+        try:
+            from wm_worker.yume_single_gpu_runtime import (
+                YumeSingleGpuRuntime,
+                YumeSingleGpuRuntimeError,
+            )
+        except Exception as exc:  # pragma: no cover - dependency/runtime boundary
+            raise YumeEngineError("failed importing Yume runtime adapter") from exc
+
         self._device = "cuda"
         torch.backends.cuda.matmul.allow_tf32 = True
-        self._gpu_generator = torch.Generator(device=self._device)
+        runtime = YumeSingleGpuRuntime(
+            model_dir=self._config.yume_model_dir,
+            frame_width=self._config.frame_width,
+            frame_height=self._config.frame_height,
+            device=self._device,
+            logger=self._logger,
+        )
+        try:
+            runtime.load()
+        except YumeSingleGpuRuntimeError as exc:
+            raise YumeEngineError(str(exc)) from exc
+
+        self._runtime = runtime
         self._loaded = True
         self._logger.info("yume engine initialized in single-GPU mode on %s", self._device)
 
@@ -105,7 +125,9 @@ class YumeEngine:
         if self._config.wm_engine == "fake":
             frames = self._generate_fake_chunk()
         else:
-            frames = await self._generate_gpu_chunk()
+            if self._runtime is None:
+                raise YumeEngineError("runtime is not initialized")
+            frames = self._runtime.generate_chunk(self._prompt, self._config.yume_chunk_frames)
         inference_ms = (time.perf_counter() - started) * 1000
         return ChunkResult(frames=frames, inference_ms=inference_ms / max(len(frames), 1))
 
@@ -117,32 +139,6 @@ class YumeEngine:
         for _ in range(self._config.yume_chunk_frames):
             frames.append(self._make_frame(seed=f"{self._prompt}:{self._frame_idx}"))
             self._frame_idx += 1
-        return frames
-
-    async def _generate_gpu_chunk(self) -> list[np.ndarray]:
-        # Lightweight GPU-backed placeholder path for Yume integration scaffolding.
-        # It keeps single-GPU BF16/TF32 runtime behavior and produces streamable frames.
-        if self._torch is None:
-            raise YumeEngineError("torch is not initialized")
-        torch = self._torch
-
-        frames: list[np.ndarray] = []
-        width = self._config.frame_width
-        height = self._config.frame_height
-        for _ in range(self._config.yume_chunk_frames):
-            rand = torch.randint(
-                low=0,
-                high=256,
-                size=(height, width, 3),
-                dtype=torch.uint8,
-                device=self._device,
-                generator=self._gpu_generator,
-            )
-            frame = rand.cpu().numpy()
-            frame = self._apply_action_overlay(frame)
-            frames.append(frame)
-            self._frame_idx += 1
-            await asyncio.sleep(0)
         return frames
 
     def _make_frame(self, seed: str) -> np.ndarray:
