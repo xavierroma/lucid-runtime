@@ -22,11 +22,13 @@ async def test_mark_running_posts_internal_path() -> None:
     )
 
     await client.mark_running("session-1")
-    await client.mark_ended("session-1", "MODEL_RUNTIME_ERROR")
+    await client.mark_heartbeat("session-1")
+    await client.mark_ended("session-1", "MODEL_RUNTIME_ERROR", "WORKER_REPORTED_ERROR")
     await client.close()
 
     assert seen_paths == [
         "/internal/v1/sessions/session-1/running",
+        "/internal/v1/sessions/session-1/heartbeat",
         "/internal/v1/sessions/session-1/ended",
     ]
 

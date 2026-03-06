@@ -1,12 +1,18 @@
 import { demoEnv } from "@/lib/env"
 
-export type SessionState = "CREATED" | "RUNNING" | "ENDED"
+export type SessionState =
+  | "STARTING"
+  | "RUNNING"
+  | "CANCELING"
+  | "ENDED"
+  | "FAILED"
 
 export interface SessionRecord {
   session_id: string
   room_name: string
   state: SessionState
   error_code?: string | null
+  end_reason?: string | null
 }
 
 export interface CreateSessionResponse {
@@ -73,4 +79,8 @@ export async function endSession(sessionId: string) {
   return request<void>(`/v1/sessions/${sessionId}:end`, {
     method: "POST",
   })
+}
+
+export function isTerminalSessionState(state: SessionState) {
+  return state === "ENDED" || state === "FAILED"
 }

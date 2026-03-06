@@ -34,6 +34,8 @@ coordinator:
       value: "3600"
     - name: SESSION_CANCEL_GRACE_SECS
       value: "30"
+    - name: WORKER_HEARTBEAT_TIMEOUT_SECS
+      value: "15"
   resources: {}
 
 worker:

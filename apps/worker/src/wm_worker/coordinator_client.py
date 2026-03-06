@@ -42,10 +42,21 @@ class CoordinatorClient:
         response = await self._client.post(f"/internal/v1/sessions/{session_id}/running")
         self._raise_for_error(response)
 
-    async def mark_ended(self, session_id: str, error_code: str | None) -> None:
+    async def mark_heartbeat(self, session_id: str) -> None:
+        response = await self._client.post(f"/internal/v1/sessions/{session_id}/heartbeat")
+        self._raise_for_error(response)
+
+    async def mark_ended(
+        self,
+        session_id: str,
+        error_code: str | None,
+        end_reason: str | None = None,
+    ) -> None:
         payload: dict[str, Any] = {}
         if error_code:
             payload["error_code"] = error_code
+        if end_reason:
+            payload["end_reason"] = end_reason
         response = await self._client.post(
             f"/internal/v1/sessions/{session_id}/ended", json=payload
         )

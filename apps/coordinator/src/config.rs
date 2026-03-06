@@ -16,6 +16,7 @@ pub struct Config {
     pub session_startup_timeout: Duration,
     pub session_max_duration: Duration,
     pub session_cancel_grace: Duration,
+    pub worker_heartbeat_timeout: Duration,
 }
 
 #[derive(Debug, Error)]
@@ -30,6 +31,8 @@ pub enum ConfigError {
     InvalidSessionMaxDuration(String),
     #[error("invalid SESSION_CANCEL_GRACE_SECS: {0}")]
     InvalidSessionCancelGrace(String),
+    #[error("invalid WORKER_HEARTBEAT_TIMEOUT_SECS: {0}")]
+    InvalidWorkerHeartbeatTimeout(String),
 }
 
 impl Config {
@@ -70,6 +73,11 @@ impl Config {
                 30,
                 ConfigError::InvalidSessionCancelGrace,
             )?,
+            worker_heartbeat_timeout: duration_var(
+                "WORKER_HEARTBEAT_TIMEOUT_SECS",
+                15,
+                ConfigError::InvalidWorkerHeartbeatTimeout,
+            )?,
         })
     }
 
@@ -87,6 +95,7 @@ impl Config {
             session_startup_timeout: Duration::from_secs(120),
             session_max_duration: Duration::from_secs(3600),
             session_cancel_grace: Duration::from_secs(30),
+            worker_heartbeat_timeout: Duration::from_secs(15),
         }
     }
 }

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from wm_worker.modal_dispatch_api import LaunchRequest, SessionDispatcher, create_app
+from wm_worker.modal_dispatch_api import (
+    FunctionCallStatus,
+    LaunchRequest,
+    SessionDispatcher,
+    create_app,
+)
 
 
 class StubDispatcher(SessionDispatcher):
@@ -10,14 +15,20 @@ class StubDispatcher(SessionDispatcher):
         self.launch_count = 0
         self.cancel_count = 0
         self.last_cancel_id: str | None = None
+        self.last_cancel_force = False
 
     def launch(self, payload: LaunchRequest) -> str:
         self.launch_count += 1
         return f"call-{payload.session_id}"
 
-    def cancel(self, function_call_id: str) -> None:
+    def cancel(self, function_call_id: str, *, force: bool = False) -> None:
         self.cancel_count += 1
         self.last_cancel_id = function_call_id
+        self.last_cancel_force = force
+
+    def status(self, function_call_id: str) -> FunctionCallStatus:
+        _ = function_call_id
+        return FunctionCallStatus.PENDING
 
 
 def test_launch_returns_function_call_id() -> None:
@@ -52,13 +63,28 @@ def test_cancel_is_idempotent() -> None:
     response = client.post(
         "/cancel",
         headers={"Authorization": "Bearer token-1"},
-        json={"function_call_id": "call-1"},
+        json={"function_call_id": "call-1", "force": True},
     )
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     assert dispatcher.cancel_count == 1
     assert dispatcher.last_cancel_id == "call-1"
+    assert dispatcher.last_cancel_force is True
+
+
+def test_status_returns_dispatcher_status() -> None:
+    dispatcher = StubDispatcher()
+    app = create_app(dispatcher, "token-1")
+    client = TestClient(app)
+
+    response = client.get(
+        "/status/call-1",
+        headers={"Authorization": "Bearer token-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "PENDING"}
 
 
 def test_auth_rejection_for_launch_and_cancel() -> None:
