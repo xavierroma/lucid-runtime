@@ -200,6 +200,15 @@ def _build_assignment(request: LaunchRequest) -> Assignment:
     )
 
 
+def _normalize_function_call_status(raw_status: Any) -> FunctionCallStatus:
+    normalized = getattr(raw_status, "name", None) or str(raw_status)
+    normalized = normalized.split(".")[-1].upper()
+    try:
+        return FunctionCallStatus(normalized)
+    except ValueError:
+        return FunctionCallStatus.PENDING
+
+
 @app.cls(
     image=image,
     gpu=GPU_TYPE,
@@ -260,8 +269,29 @@ class ModalSessionDispatcher:
     def launch(self, payload: LaunchRequest) -> str:
         return _spawn_session(payload)
 
-    def cancel(self, function_call_id: str) -> None:
-        modal.FunctionCall.from_id(function_call_id).cancel()
+    def cancel(self, function_call_id: str, *, force: bool = False) -> None:
+        modal.FunctionCall.from_id(function_call_id).cancel(terminate_containers=force)
+
+    def status(self, function_call_id: str) -> FunctionCallStatus:
+        try:
+            graph = modal.FunctionCall.from_id(function_call_id).get_call_graph()
+        except Exception as exc:
+            if exc.__class__.__name__ == "NotFoundError":
+                return FunctionCallStatus.NOT_FOUND
+            raise
+
+        if not graph:
+            return FunctionCallStatus.PENDING
+
+        root = next(
+            (
+                node
+                for node in graph
+                if getattr(node, "parent_input_id", None) in (None, "")
+            ),
+            graph[0],
+        )
+        return _normalize_function_call_status(getattr(root, "status", "PENDING"))
 
 
 @app.function(image=image, gpu=GPU_TYPE, timeout=10 * 60, secrets=[runtime_secret])

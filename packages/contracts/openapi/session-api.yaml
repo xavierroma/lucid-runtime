@@ -85,8 +85,11 @@ components:
           type: string
         state:
           type: string
-          enum: [CREATED, RUNNING, ENDED]
+          enum: [STARTING, RUNNING, CANCELING, ENDED, FAILED]
         error_code:
+          type: string
+          nullable: true
+        end_reason:
           type: string
           nullable: true
     CreateSessionResponse:

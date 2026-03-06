@@ -16,6 +16,7 @@ Public API uses bearer auth:
 ## Internal runtime callback API
 
 - `POST /internal/v1/sessions/{session_id}/running`
+- `POST /internal/v1/sessions/{session_id}/heartbeat`
 - `POST /internal/v1/sessions/{session_id}/ended`
 
 Internal API uses bearer auth:
@@ -24,11 +25,11 @@ Internal API uses bearer auth:
 
 ## Runtime behavior
 
-- In-memory session state only (`CREATED -> RUNNING -> ENDED`)
+- In-memory session state only (`STARTING -> RUNNING -> CANCELING -> ENDED|FAILED`)
 - Single active session invariant
 - Session create dispatches to Modal and stores `function_call_id`
-- Public end requests are idempotent and trigger best-effort Modal cancel
-- Background reconciliation auto-ends stuck sessions (`STARTUP_TIMEOUT`, `SESSION_TIMEOUT`, `CANCEL_TIMEOUT`)
+- Public end requests are idempotent and move sessions into `CANCELING`
+- Background reconciliation polls Modal status, consumes worker heartbeats, and escalates cancel requests before failing stuck sessions
 
 ## Configuration
 
@@ -49,6 +50,7 @@ Optional environment variables:
 - `SESSION_STARTUP_TIMEOUT_SECS` (default: `120`)
 - `SESSION_MAX_DURATION_SECS` (default: `3600`)
 - `SESSION_CANCEL_GRACE_SECS` (default: `30`)
+- `WORKER_HEARTBEAT_TIMEOUT_SECS` (default: `15`)
 
 ## Local run
 

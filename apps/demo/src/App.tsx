@@ -24,6 +24,7 @@ import {
   createSession,
   endSession,
   getSession,
+  isTerminalSessionState,
   type SessionRecord,
 } from "@/lib/coordinator"
 import { demoEnv, getMissingConfig } from "@/lib/env"
@@ -73,11 +74,11 @@ export function App() {
   const [endPending, setEndPending] = useState(false)
   const [lastPromptSentAt, setLastPromptSentAt] = useState<number | null>(null)
 
-  const canCreateSession = !session || session.state === "ENDED"
+  const canCreateSession = !session || isTerminalSessionState(session.state)
   const hasActiveToken = Boolean(session && sessionToken)
 
   useEffect(() => {
-    if (!session?.session_id || session.state === "ENDED") {
+    if (!session?.session_id || isTerminalSessionState(session.state)) {
       return
     }
 
@@ -202,7 +203,7 @@ export function App() {
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={!session || session.state === "ENDED" || endPending}
+                  disabled={!session || isTerminalSessionState(session.state) || endPending}
                   onClick={() => void handleEndSession()}
                 >
                   {endPending ? (
@@ -355,6 +356,12 @@ export function App() {
             {session?.error_code ? (
               <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
                 Session error: {session.error_code}
+              </div>
+            ) : null}
+
+            {session?.end_reason ? (
+              <div className="rounded-xl border border-border/70 bg-card px-3 py-2 text-sm text-muted-foreground">
+                Session end reason: {session.end_reason}
               </div>
             ) : null}
 

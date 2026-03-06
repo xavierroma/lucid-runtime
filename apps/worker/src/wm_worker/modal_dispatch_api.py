@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from typing import Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -23,15 +24,31 @@ class LaunchResponse(BaseModel):
 
 class CancelRequest(BaseModel):
     function_call_id: str
+    force: bool = False
 
 
 class OkResponse(BaseModel):
     status: str = "ok"
 
 
+class FunctionCallStatus(str, Enum):
+    PENDING = "PENDING"
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    INIT_FAILURE = "INIT_FAILURE"
+    TERMINATED = "TERMINATED"
+    TIMEOUT = "TIMEOUT"
+    NOT_FOUND = "NOT_FOUND"
+
+
+class StatusResponse(BaseModel):
+    status: FunctionCallStatus
+
+
 class SessionDispatcher(Protocol):
     def launch(self, payload: LaunchRequest) -> str: ...
-    def cancel(self, function_call_id: str) -> None: ...
+    def cancel(self, function_call_id: str, *, force: bool = False) -> None: ...
+    def status(self, function_call_id: str) -> FunctionCallStatus: ...
 
 
 def create_app(dispatcher: SessionDispatcher, dispatch_token: str) -> FastAPI:
@@ -55,9 +72,16 @@ def create_app(dispatcher: SessionDispatcher, dispatch_token: str) -> FastAPI:
     @app.post("/cancel", response_model=OkResponse)
     def cancel(payload: CancelRequest, _auth: None = Depends(_authorize)) -> OkResponse:
         try:
-            dispatcher.cancel(payload.function_call_id)
+            dispatcher.cancel(payload.function_call_id, force=payload.force)
         except Exception:
             pass
         return OkResponse()
+
+    @app.get("/status/{function_call_id}", response_model=StatusResponse)
+    def status(
+        function_call_id: str,
+        _auth: None = Depends(_authorize),
+    ) -> StatusResponse:
+        return StatusResponse(status=dispatcher.status(function_call_id))
 
     return app

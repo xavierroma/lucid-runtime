@@ -17,7 +17,7 @@ use tokio::{
 
 use config::Config;
 use modal_dispatch::{HttpModalDispatchClient, ModalDispatch};
-use state::RuntimeState;
+use state::{ReconcileCommand, RuntimeState};
 
 #[derive(Clone)]
 pub struct AppContext {
@@ -66,10 +66,58 @@ pub fn build_router(ctx: AppContext) -> Router {
             axum::routing::post(api_internal::mark_running),
         )
         .route(
+            "/internal/v1/sessions/:session_id/heartbeat",
+            axum::routing::post(api_internal::mark_heartbeat),
+        )
+        .route(
             "/internal/v1/sessions/:session_id/ended",
             axum::routing::post(api_internal::mark_ended),
         )
         .with_state(ctx)
+}
+
+pub async fn reconcile_runtime(ctx: &AppContext) {
+    let snapshot = {
+        let runtime = ctx.runtime.read().await;
+        runtime.active_session_snapshot()
+    };
+
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+
+    let modal_status = match ctx
+        .modal_dispatch
+        .get_session_status(&snapshot.function_call_id)
+        .await
+    {
+        Ok(status) => Some(status),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                session_id = %snapshot.session_id,
+                function_call_id = %snapshot.function_call_id,
+                "failed to query modal status"
+            );
+            None
+        }
+    };
+
+    let commands = {
+        let mut runtime = ctx.runtime.write().await;
+        runtime.reconcile_active_session(
+            &snapshot.session_id,
+            &snapshot.function_call_id,
+            modal_status,
+            Instant::now(),
+            ctx.config.session_startup_timeout,
+            ctx.config.session_max_duration,
+            ctx.config.session_cancel_grace,
+            ctx.config.worker_heartbeat_timeout,
+        )
+    };
+
+    execute_reconcile_commands(ctx, commands).await;
 }
 
 pub async fn run_session_reconciler(ctx: AppContext) {
@@ -77,13 +125,37 @@ pub async fn run_session_reconciler(ctx: AppContext) {
 
     loop {
         ticker.tick().await;
-        let mut runtime = ctx.runtime.write().await;
-        runtime.reconcile_timeouts(
-            Instant::now(),
-            ctx.config.session_startup_timeout,
-            ctx.config.session_max_duration,
-            ctx.config.session_cancel_grace,
-        );
+        reconcile_runtime(&ctx).await;
+    }
+}
+
+async fn execute_reconcile_commands(ctx: &AppContext, commands: Vec<ReconcileCommand>) {
+    for command in commands {
+        match command {
+            ReconcileCommand::CancelModal {
+                session_id,
+                function_call_id,
+                force,
+            } => match ctx
+                .modal_dispatch
+                .cancel_session(&function_call_id, force)
+                .await
+            {
+                Ok(()) => {
+                    let mut runtime = ctx.runtime.write().await;
+                    let _ = runtime.mark_cancel_dispatched(&session_id, Instant::now(), force);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        session_id = %session_id,
+                        function_call_id = %function_call_id,
+                        force,
+                        "failed to dispatch modal cancel during reconciliation"
+                    );
+                }
+            },
+        }
     }
 }
 
@@ -110,17 +182,19 @@ mod tests {
     use crate::{
         build_router,
         config::Config,
-        modal_dispatch::{LaunchSessionRequest, ModalDispatch, ModalDispatchError},
+        modal_dispatch::{
+            LaunchSessionRequest, ModalDispatch, ModalDispatchError, ModalExecutionStatus,
+        },
         models::{CreateSessionResponse, SessionState},
         AppContext,
     };
 
-    #[derive(Default)]
     struct FakeModalDispatch {
         launch_ids: Mutex<VecDeque<String>>,
         launched_sessions: Mutex<Vec<Uuid>>,
         canceled_calls: Mutex<Vec<String>>,
         fail_launch: Mutex<bool>,
+        status: Mutex<ModalExecutionStatus>,
     }
 
     impl FakeModalDispatch {
@@ -130,6 +204,7 @@ mod tests {
                 launched_sessions: Mutex::new(Vec::new()),
                 canceled_calls: Mutex::new(Vec::new()),
                 fail_launch: Mutex::new(false),
+                status: Mutex::new(ModalExecutionStatus::Pending),
             }
         }
 
@@ -142,6 +217,12 @@ mod tests {
 
         fn canceled_count(&self) -> usize {
             self.canceled_calls.lock().expect("cancel calls lock").len()
+        }
+    }
+
+    impl Default for FakeModalDispatch {
+        fn default() -> Self {
+            Self::with_ids(&[])
         }
     }
 
@@ -168,12 +249,23 @@ mod tests {
                 .unwrap_or_else(|| "call-default".to_string()))
         }
 
-        async fn cancel_session(&self, function_call_id: &str) -> Result<(), ModalDispatchError> {
+        async fn cancel_session(
+            &self,
+            function_call_id: &str,
+            _force: bool,
+        ) -> Result<(), ModalDispatchError> {
             self.canceled_calls
                 .lock()
                 .expect("cancel calls lock")
                 .push(function_call_id.to_string());
             Ok(())
+        }
+
+        async fn get_session_status(
+            &self,
+            _function_call_id: &str,
+        ) -> Result<ModalExecutionStatus, ModalDispatchError> {
+            Ok(self.status.lock().expect("status lock").clone())
         }
     }
 
@@ -239,7 +331,7 @@ mod tests {
 
         let (status, payload) = create_session(&app, &config).await;
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(payload.session.state, SessionState::Created);
+        assert_eq!(payload.session.state, SessionState::Starting);
         assert!(payload.client_access_token.is_some());
         assert!(payload
             .session
@@ -342,6 +434,22 @@ mod tests {
         assert_eq!(first_end.status(), StatusCode::OK);
         assert_eq!(fake_dispatch.canceled_count(), 1);
 
+        let get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/v1/sessions/{}", created.session.session_id))
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let payload = read_json(get).await;
+        assert_eq!(payload["state"], "CANCELING");
+        assert_eq!(payload["end_reason"], "CLIENT_REQUESTED");
+
         let second_end = app
             .clone()
             .oneshot(
@@ -420,8 +528,9 @@ mod tests {
             .await
             .expect("request should succeed");
         let payload = read_json(get).await;
-        assert_eq!(payload["state"], "ENDED");
+        assert_eq!(payload["state"], "FAILED");
         assert_eq!(payload["error_code"], "MODEL_RUNTIME_ERROR");
+        assert_eq!(payload["end_reason"], "WORKER_REPORTED_ERROR");
     }
 
     #[tokio::test]
@@ -442,5 +551,18 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(running.status(), StatusCode::UNAUTHORIZED);
+
+        let heartbeat = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/internal/v1/sessions/{session_id}/heartbeat"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(heartbeat.status(), StatusCode::UNAUTHORIZED);
     }
 }

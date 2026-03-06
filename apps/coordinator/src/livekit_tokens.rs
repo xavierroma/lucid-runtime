@@ -50,7 +50,7 @@ pub fn mint_access_token(
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use jsonwebtoken::{decode, DecodingKey, Validation};
     use serde_json::Value;
 
@@ -94,11 +94,13 @@ mod tests {
         let decoded = URL_SAFE_NO_PAD
             .decode(payload)
             .expect("payload should be valid base64url");
-        let claims: Value =
-            serde_json::from_slice(&decoded).expect("payload should be valid json");
+        let claims: Value = serde_json::from_slice(&decoded).expect("payload should be valid json");
 
         assert_eq!(claims["video"]["roomJoin"], Value::Bool(true));
-        assert_eq!(claims["video"]["room"], Value::String("wm-room".to_string()));
+        assert_eq!(
+            claims["video"]["room"],
+            Value::String("wm-room".to_string())
+        );
         assert!(claims["video"].get("room_join").is_none());
     }
 }

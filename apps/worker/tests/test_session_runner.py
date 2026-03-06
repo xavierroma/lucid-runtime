@@ -124,10 +124,10 @@ async def test_session_runner_calls_running_and_ended(worker_env: None) -> None:
     )
     await runner.close()
 
-    assert [path for path, _ in calls] == [
-        "/internal/v1/sessions/session-1/running",
-        "/internal/v1/sessions/session-1/ended",
-    ]
+    paths = [path for path, _ in calls]
+    assert paths[0] == "/internal/v1/sessions/session-1/running"
+    assert paths[-1] == "/internal/v1/sessions/session-1/ended"
+    assert calls[-1][1] == {"end_reason": "CONTROL_REQUESTED"}
     assert any(b'"type":"started"' in status for status in adapter.status_messages)
     assert any(b'"type":"ended"' in status for status in adapter.status_messages)
 
@@ -172,7 +172,10 @@ async def test_session_runner_reports_error_when_connect_fails(worker_env: None)
     await runner.close()
 
     assert ended_payloads, "expected ended callback"
-    assert ended_payloads[0] == {"error_code": "LIVEKIT_DISCONNECT"}
+    assert ended_payloads[0] == {
+        "error_code": "LIVEKIT_DISCONNECT",
+        "end_reason": "WORKER_REPORTED_ERROR",
+    }
 
 
 @pytest.mark.asyncio
@@ -222,7 +225,5 @@ async def test_session_runner_treats_modal_input_cancellation_as_clean_end(
     await runner.close()
 
     assert result.error_code is None
-    assert [path for path, _ in calls] == [
-        "/internal/v1/sessions/session-cancel/ended",
-    ]
+    assert [path for path, _ in calls] == ["/internal/v1/sessions/session-cancel/ended"]
     assert calls[-1][1] == {}

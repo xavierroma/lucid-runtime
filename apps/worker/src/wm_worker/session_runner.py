@@ -21,6 +21,8 @@ from wm_worker.yume_engine import YumeEngine, YumeEngineError
 
 
 class SessionRunner:
+    HEARTBEAT_INTERVAL_SECS = 2.0
+
     def __init__(
         self,
         runtime_config: RuntimeConfig,
@@ -125,6 +127,10 @@ class SessionRunner:
                     ),
                     name="metrics_loop",
                 ),
+                asyncio.create_task(
+                    self._heartbeat_loop(session_id=assignment.session_id),
+                    name="heartbeat_loop",
+                ),
             ]
             await self._watch_session_tasks(tasks, result)
         except YumeEngineError as exc:
@@ -141,7 +147,16 @@ class SessionRunner:
             await self._emit_terminal_status(status, result, frame_pipeline)
             await livekit.disconnect()
             try:
-                await self._coordinator.mark_ended(assignment.session_id, result.error_code)
+                end_reason = None
+                if result.error_code:
+                    end_reason = "WORKER_REPORTED_ERROR"
+                elif result.ended_by_control:
+                    end_reason = "CONTROL_REQUESTED"
+                await self._coordinator.mark_ended(
+                    assignment.session_id,
+                    result.error_code,
+                    end_reason,
+                )
             except Exception as exc:
                 self._logger.warning("failed to mark session ended: %s", exc)
             self._logger.info(
@@ -258,6 +273,20 @@ class SessionRunner:
         while not self._session_stop_event.is_set():
             await status.frame_metrics(frame_pipeline.metrics())
             await asyncio.sleep(1.0)
+
+    async def _heartbeat_loop(self, *, session_id: str) -> None:
+        while not self._session_stop_event.is_set():
+            try:
+                await self._coordinator.mark_heartbeat(session_id)
+            except Exception as exc:
+                self._logger.warning("failed sending coordinator heartbeat: %s", exc)
+            try:
+                await asyncio.wait_for(
+                    self._session_stop_event.wait(),
+                    timeout=self.HEARTBEAT_INTERVAL_SECS,
+                )
+            except TimeoutError:
+                continue
 
     async def _emit_terminal_status(
         self,

@@ -24,14 +24,10 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
+    crate::reconcile_runtime(&ctx).await;
+
     {
-        let mut runtime = ctx.runtime.write().await;
-        runtime.reconcile_timeouts(
-            Instant::now(),
-            ctx.config.session_startup_timeout,
-            ctx.config.session_max_duration,
-            ctx.config.session_cancel_grace,
-        );
+        let runtime = ctx.runtime.read().await;
         if !runtime.can_create_session() {
             return error_response(StatusCode::CONFLICT, "active session in progress");
         }
@@ -94,26 +90,34 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
         }
     };
 
-    let session = {
+    let (session, post_launch_conflict) = {
         let mut runtime = ctx.runtime.write().await;
-        runtime.reconcile_timeouts(
-            Instant::now(),
-            ctx.config.session_startup_timeout,
-            ctx.config.session_max_duration,
-            ctx.config.session_cancel_grace,
-        );
         if !runtime.can_create_session() {
-            if let Err(err) = ctx.modal_dispatch.cancel_session(&function_call_id).await {
-                tracing::warn!(
-                    error = %err,
-                    function_call_id = %function_call_id,
-                    "failed to cancel modal call after coordinator conflict"
-                );
-            }
-            return error_response(StatusCode::CONFLICT, "active session in progress");
+            (None, true)
+        } else {
+            (
+                Some(runtime.create_session(session_id, function_call_id.clone(), Instant::now())),
+                false,
+            )
         }
-        runtime.create_session(session_id, function_call_id, Instant::now())
     };
+
+    if post_launch_conflict {
+        if let Err(err) = ctx
+            .modal_dispatch
+            .cancel_session(&function_call_id, false)
+            .await
+        {
+            tracing::warn!(
+                error = %err,
+                function_call_id = %function_call_id,
+                "failed to cancel modal call after coordinator conflict"
+            );
+        }
+        return error_response(StatusCode::CONFLICT, "active session in progress");
+    }
+
+    let session = session.expect("session should exist when no post-launch conflict");
 
     (
         StatusCode::ACCEPTED,
@@ -133,6 +137,8 @@ pub async fn get_session(
     if !auth::is_bearer_authorized(&headers, &ctx.config.api_key) {
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
+
+    crate::reconcile_runtime(&ctx).await;
 
     let Ok(session_id) = Uuid::parse_str(&session_id) else {
         return error_response(StatusCode::NOT_FOUND, "session not found");
@@ -155,18 +161,14 @@ pub async fn end_session(
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
+    crate::reconcile_runtime(&ctx).await;
+
     let Some(session_id) = parse_end_session_id(&session_id_and_action) else {
         return error_response(StatusCode::NOT_FOUND, "session not found");
     };
 
     let end_result = {
         let mut runtime = ctx.runtime.write().await;
-        runtime.reconcile_timeouts(
-            Instant::now(),
-            ctx.config.session_startup_timeout,
-            ctx.config.session_max_duration,
-            ctx.config.session_cancel_grace,
-        );
         runtime.request_end_session(&session_id, Instant::now())
     };
 
@@ -178,12 +180,19 @@ pub async fn end_session(
     };
 
     if let Some(function_call_id) = end_result.function_call_id {
-        if let Err(err) = ctx.modal_dispatch.cancel_session(&function_call_id).await {
+        if let Err(err) = ctx
+            .modal_dispatch
+            .cancel_session(&function_call_id, false)
+            .await
+        {
             tracing::warn!(
                 error = %err,
                 function_call_id = %function_call_id,
                 "failed to cancel modal function call"
             );
+        } else {
+            let mut runtime = ctx.runtime.write().await;
+            let _ = runtime.mark_cancel_dispatched(&session_id, Instant::now(), false);
         }
     }
 
