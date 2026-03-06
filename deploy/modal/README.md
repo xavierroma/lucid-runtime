@@ -2,17 +2,40 @@
 
 Request-based GPU execution is deployed via `wm_worker.modal_app`.
 
+## Scripted workflow
+
+All helper scripts live in `deploy/modal` and source `deploy/modal/.env` by default.
+
+```bash
+cp deploy/modal/.env.example deploy/modal/.env
+```
+
+Common scripts:
+
+- `deploy/modal/create-volumes.sh`
+- `deploy/modal/download-model.sh -- --repo-id stdstu123/Yume-5B-720P`
+- `deploy/modal/flash-attn-smoke.sh`
+- `deploy/modal/deploy.sh`
+- `deploy/modal/serve.sh`
+- `deploy/modal/logs.sh -- --timestamps`
+- `deploy/modal/stop.sh`
+
+To use a different env file:
+
+```bash
+deploy/modal/deploy.sh --env-file /path/to/modal.env
+```
+
 ## 1) Create Modal resources
 
 ```bash
-modal volume create lucid-yume-models
-modal volume create lucid-hf-cache
+deploy/modal/create-volumes.sh
 ```
 
 ## 2) Upload Yume model files to model volume
 
 ```bash
-modal volume put lucid-yume-models /local/path/to/Yume-5B-720P /models/Yume-5B-720P
+deploy/modal/download-model.sh -- --repo-id stdstu123/Yume-5B-720P
 ```
 
 ## 3) Configure secrets/env for Modal app
@@ -36,7 +59,7 @@ Optional:
 ## 4) Deploy
 
 ```bash
-modal deploy apps/worker/src/wm_worker/modal_app.py
+deploy/modal/deploy.sh
 ```
 
 Modal serves:
