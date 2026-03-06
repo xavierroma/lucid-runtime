@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Protocol
 
 import numpy as np
@@ -45,10 +46,15 @@ class FakeLiveKitAdapter:
         _ = frame
 
     async def recv_control(self, timeout_s: float) -> bytes | None:
-        try:
-            return await asyncio.wait_for(self._controls.get(), timeout=timeout_s)
-        except TimeoutError:
-            return None
+        deadline = time.monotonic() + max(timeout_s, 0.0)
+        while True:
+            try:
+                return self._controls.get_nowait()
+            except asyncio.QueueEmpty:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                await asyncio.sleep(min(remaining, 0.01))
 
     async def send_status(self, payload: bytes) -> None:
         _ = payload
@@ -79,6 +85,7 @@ class RealLiveKitAdapter:
         self._control_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._status_topic = status_topic
         self._control_topic = "wm.control.v1"
+        self._published_frames = 0
 
     async def connect_and_publish(self, assignment: Assignment) -> None:
         self._control_topic = assignment.control_topic
@@ -109,7 +116,18 @@ class RealLiveKitAdapter:
         self._track = rtc.LocalVideoTrack.create_video_track(
             assignment.video_track_name, self._video_source
         )
-        await self._room.local_participant.publish_track(self._track)
+        publish_options = None
+        try:
+            publish_options = rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_CAMERA,
+                simulcast=True,
+            )
+        except Exception:
+            publish_options = None
+        if publish_options is None:
+            await self._room.local_participant.publish_track(self._track)
+        else:
+            await self._room.local_participant.publish_track(self._track, publish_options)
         self._logger.info("connected to livekit room=%s", assignment.room_name)
 
     async def disconnect(self) -> None:
@@ -131,15 +149,29 @@ class RealLiveKitAdapter:
             width=rgb_frame.shape[1],
             height=rgb_frame.shape[0],
             type=rtc.VideoBufferType.RGB24,
-            data=memoryview(rgb_frame),
+            data=memoryview(rgb_frame).cast("B"),
         )
         self._video_source.capture_frame(video_frame)
+        self._published_frames += 1
+        if self._published_frames == 1:
+            self._logger.info(
+                "published first livekit frame size=%sx%s mean=%.2f std=%.2f",
+                rgb_frame.shape[1],
+                rgb_frame.shape[0],
+                float(rgb_frame.mean()),
+                float(rgb_frame.std()),
+            )
 
     async def recv_control(self, timeout_s: float) -> bytes | None:
-        try:
-            return await asyncio.wait_for(self._control_queue.get(), timeout=timeout_s)
-        except TimeoutError:
-            return None
+        deadline = time.monotonic() + max(timeout_s, 0.0)
+        while True:
+            try:
+                return self._control_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                await asyncio.sleep(min(remaining, 0.01))
 
     async def send_status(self, payload: bytes) -> None:
         if self._room is None:

@@ -41,13 +41,10 @@ class WorkerConfig:
     frame_width: int
     frame_height: int
     target_fps: int
-    heartbeat_interval_ms: int
-    assignment_poll_ms: int
     control_topic: str
     status_topic: str
     yume_chunk_frames: int
     yume_max_queue_frames: int
-    worker_health_port: int
     yume_enable_prompt_refiner: bool
     yume_base_prompt: str
     wm_engine: str
@@ -85,16 +82,17 @@ class WorkerConfig:
             frame_width=_get_int("WM_FRAME_WIDTH", 1280),
             frame_height=_get_int("WM_FRAME_HEIGHT", 720),
             target_fps=_get_int("WM_TARGET_FPS", 16),
-            heartbeat_interval_ms=_get_int("WM_HEARTBEAT_INTERVAL_MS", 2000),
-            assignment_poll_ms=_get_int("WM_ASSIGNMENT_POLL_MS", 1000),
             control_topic=os.getenv("WM_CONTROL_TOPIC", "wm.control.v1"),
             status_topic=os.getenv("WM_STATUS_TOPIC", "wm.status.v1"),
             yume_chunk_frames=_get_int("YUME_CHUNK_FRAMES", 8),
             yume_max_queue_frames=_get_int("YUME_MAX_QUEUE_FRAMES", 32),
-            worker_health_port=_get_int("WORKER_HEALTH_PORT", 8090),
             yume_enable_prompt_refiner=_get_bool("YUME_ENABLE_PROMPT_REFINER", False),
             yume_base_prompt=os.getenv(
-                "YUME_BASE_PROMPT", "An explorable realistic world"
+                "YUME_BASE_PROMPT",
+                (
+                    "A realistic explorable world with clear depth, coherent geometry, "
+                    "and natural motion."
+                ),
             ).strip(),
             wm_engine=os.getenv("WM_ENGINE", "fake").strip().lower(),
             livekit_mode=os.getenv("WM_LIVEKIT_MODE", "fake").strip().lower(),

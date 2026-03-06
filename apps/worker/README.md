@@ -1,14 +1,14 @@
 # Worker (Python)
 
-Single-process GPU worker runtime.
+Request-based single-session GPU runtime.
 
 ## Responsibilities
 
-- Register to coordinator and wait for assignment
-- Join assigned LiveKit room as bot participant
-- Receive action commands over data messages
+- Join an assigned LiveKit room as bot participant
+- Receive control commands over data messages
 - Run inference loop and publish `main_video`
-- Cleanup and return to IDLE on end/error
+- Emit runtime callbacks to coordinator (`running`, `ended`)
+- Exit after one session
 
 ## Required environment
 
@@ -22,7 +22,6 @@ Single-process GPU worker runtime.
 - `WORKER_ID` (default `wm-worker-1`)
 - `WM_ENGINE` (`fake` or `yume`, default `fake`)
 - `WM_LIVEKIT_MODE` (`fake` or `real`, default `fake`)
-- `WORKER_HEALTH_PORT` (default `8090`)
 - `WM_FRAME_WIDTH` (default `1280`)
 - `WM_FRAME_HEIGHT` (default `720`)
 - `WM_TARGET_FPS` (default `16`)
@@ -38,8 +37,16 @@ WORKER_INTERNAL_TOKEN=replace-me \
 LIVEKIT_URL=wss://example.livekit.cloud \
 YUME_MODEL_DIR=/tmp/yume-model \
 WM_ENGINE=fake WM_LIVEKIT_MODE=fake \
-uv run --project apps/worker wm-worker --worker-id wm-worker-1
+uv run --project apps/worker wm-worker \
+  --worker-id wm-worker-1 \
+  --session-id 11111111-1111-1111-1111-111111111111 \
+  --room-name wm-11111111-1111-1111-1111-111111111111 \
+  --worker-access-token replace-me
 ```
+
+## Modal entrypoint
+
+- `wm_worker.modal_app` exposes `/launch` and `/cancel` and runs sessions on GPU.
 
 ## Test
 

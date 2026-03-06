@@ -41,11 +41,15 @@ class FramePipeline:
         self._inference_ms.append(inference_ms)
 
     async def pop(self, timeout_s: float) -> np.ndarray | None:
-        try:
-            item = await asyncio.wait_for(self._queue.get(), timeout=timeout_s)
-            return item.frame
-        except TimeoutError:
-            return None
+        deadline = time.monotonic() + max(timeout_s, 0.0)
+        while True:
+            try:
+                return self._queue.get_nowait().frame
+            except asyncio.QueueEmpty:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                await asyncio.sleep(min(remaining, 0.01))
 
     async def publish_loop(
         self,

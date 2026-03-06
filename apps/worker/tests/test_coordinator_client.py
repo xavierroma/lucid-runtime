@@ -3,26 +3,46 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from wm_worker.coordinator_client import CoordinatorClient
+from wm_worker.coordinator_client import CoordinatorAuthError, CoordinatorClient
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_parses_cancel_signal() -> None:
+async def test_mark_running_posts_internal_path() -> None:
+    seen_paths: list[str] = []
+
     async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/internal/v1/worker/heartbeat":
-            return httpx.Response(
-                200,
-                json={"status": "ok", "cancel_active_session": True},
-            )
-        return httpx.Response(404, json={"error": "not found"})
+        seen_paths.append(request.url.path)
+        return httpx.Response(200, json={"status": "ok"})
 
     transport = httpx.MockTransport(handler)
     client = CoordinatorClient(
         base_url="http://coordinator",
-        worker_id="wm-worker-1",
         worker_internal_token="token",
         transport=transport,
     )
-    result = await client.heartbeat_worker()
+
+    await client.mark_running("session-1")
+    await client.mark_ended("session-1", "MODEL_RUNTIME_ERROR")
     await client.close()
-    assert result.cancel_active_session is True
+
+    assert seen_paths == [
+        "/internal/v1/sessions/session-1/running",
+        "/internal/v1/sessions/session-1/ended",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mark_running_raises_auth_error() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    transport = httpx.MockTransport(handler)
+    client = CoordinatorClient(
+        base_url="http://coordinator",
+        worker_internal_token="token",
+        transport=transport,
+    )
+
+    with pytest.raises(CoordinatorAuthError):
+        await client.mark_running("session-1")
+    await client.close()

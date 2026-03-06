@@ -13,18 +13,18 @@ paths:
           description: Healthy
   /v1/sessions:
     post:
-      summary: Create a session
+      summary: Create a session (async dispatch)
       security:
         - bearerAuth: []
       responses:
-        '201':
-          description: Session created
+        '202':
+          description: Session accepted and dispatched
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreateSessionResponse'
         '409':
-          description: Worker busy
+          description: Active session in progress
   /v1/sessions/{session_id}:
     get:
       summary: Get session state
@@ -85,7 +85,7 @@ components:
           type: string
         state:
           type: string
-          enum: [CREATED, ASSIGNED, RUNNING, ENDED]
+          enum: [CREATED, RUNNING, ENDED]
         error_code:
           type: string
           nullable: true
@@ -97,6 +97,4 @@ components:
         session:
           $ref: '#/components/schemas/Session'
         client_access_token:
-          type: string
-        worker_access_token:
           type: string

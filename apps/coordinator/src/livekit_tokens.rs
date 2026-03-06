@@ -4,6 +4,7 @@ use jsonwebtoken::{encode, errors::Error, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct VideoGrant {
     room_join: bool,
     room: String,
@@ -49,7 +50,9 @@ pub fn mint_access_token(
 
 #[cfg(test)]
 mod tests {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use jsonwebtoken::{decode, DecodingKey, Validation};
+    use serde_json::Value;
 
     use super::*;
 
@@ -78,5 +81,24 @@ mod tests {
         assert_eq!(decoded.claims.sub, "client-1");
         assert_eq!(decoded.claims.video.room, "wm-room");
         assert!(decoded.claims.video.room_join);
+    }
+
+    #[test]
+    fn serializes_video_grant_in_camel_case() {
+        let token = mint_access_token("api-key", "secret", "client-1", "wm-room")
+            .expect("token should be minted");
+        let payload = token
+            .split('.')
+            .nth(1)
+            .expect("jwt should have payload segment");
+        let decoded = URL_SAFE_NO_PAD
+            .decode(payload)
+            .expect("payload should be valid base64url");
+        let claims: Value =
+            serde_json::from_slice(&decoded).expect("payload should be valid json");
+
+        assert_eq!(claims["video"]["roomJoin"], Value::Bool(true));
+        assert_eq!(claims["video"]["room"], Value::String("wm-room".to_string()));
+        assert!(claims["video"].get("room_join").is_none());
     }
 }

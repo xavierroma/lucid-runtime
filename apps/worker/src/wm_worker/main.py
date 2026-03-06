@@ -1,20 +1,25 @@
-"""Entrypoint for the production worker runtime."""
+"""Entrypoint for request-based session execution."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import logging
-import signal
 import sys
 
 from wm_worker.config import ConfigError, WorkerConfig
-from wm_worker.runner import WorkerRunner
+from wm_worker.models import Assignment
+from wm_worker.session_runner import SessionRunner
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Lucid worker runtime")
+    parser = argparse.ArgumentParser(description="Lucid worker single-session runtime")
     parser.add_argument("--worker-id", default="wm-worker-1")
+    parser.add_argument("--session-id", required=True)
+    parser.add_argument("--room-name", required=True)
+    parser.add_argument("--worker-access-token", required=True)
+    parser.add_argument("--video-track-name", default="main_video")
+    parser.add_argument("--control-topic", default="wm.control.v1")
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -35,11 +40,19 @@ async def _async_main(args: argparse.Namespace) -> int:
         logger.error("invalid configuration: %s", exc)
         return 2
 
-    runner = WorkerRunner(config, logger)
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, runner.request_shutdown)
-    await runner.run()
+    assignment = Assignment(
+        session_id=args.session_id,
+        room_name=args.room_name,
+        worker_access_token=args.worker_access_token,
+        video_track_name=args.video_track_name,
+        control_topic=args.control_topic,
+    )
+
+    runner = SessionRunner(config, logger)
+    try:
+        await runner.run_session(assignment)
+    finally:
+        await runner.close()
     return 0
 
 

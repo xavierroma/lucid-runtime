@@ -10,7 +10,12 @@ pub struct Config {
     pub livekit_api_key: String,
     pub livekit_api_secret: String,
     pub worker_id: String,
-    pub heartbeat_ttl: Duration,
+    pub modal_dispatch_base_url: String,
+    pub modal_dispatch_token: String,
+    pub callback_base_url: String,
+    pub session_startup_timeout: Duration,
+    pub session_max_duration: Duration,
+    pub session_cancel_grace: Duration,
 }
 
 #[derive(Debug, Error)]
@@ -19,8 +24,12 @@ pub enum ConfigError {
     MissingVar(&'static str),
     #[error("invalid COORDINATOR_BIND_ADDR: {0}")]
     InvalidBindAddr(String),
-    #[error("invalid HEARTBEAT_TTL_SECS: {0}")]
-    InvalidHeartbeatTtl(String),
+    #[error("invalid SESSION_STARTUP_TIMEOUT_SECS: {0}")]
+    InvalidSessionStartupTimeout(String),
+    #[error("invalid SESSION_MAX_DURATION_SECS: {0}")]
+    InvalidSessionMaxDuration(String),
+    #[error("invalid SESSION_CANCEL_GRACE_SECS: {0}")]
+    InvalidSessionCancelGrace(String),
 }
 
 impl Config {
@@ -32,15 +41,6 @@ impl Config {
                 ConfigError::InvalidBindAddr(err.to_string())
             })?;
 
-        let heartbeat_ttl = match env::var("HEARTBEAT_TTL_SECS") {
-            Ok(raw) => {
-                let secs = u64::from_str(&raw)
-                    .map_err(|err| ConfigError::InvalidHeartbeatTtl(err.to_string()))?;
-                Duration::from_secs(secs)
-            }
-            Err(_) => Duration::from_secs(15),
-        };
-
         Ok(Self {
             bind_addr,
             api_key: required("API_KEY")?,
@@ -48,7 +48,28 @@ impl Config {
             livekit_api_key: required("LIVEKIT_API_KEY")?,
             livekit_api_secret: required("LIVEKIT_API_SECRET")?,
             worker_id: env::var("WORKER_ID").unwrap_or_else(|_| "wm-worker-1".to_string()),
-            heartbeat_ttl,
+            modal_dispatch_base_url: required("MODAL_DISPATCH_BASE_URL")?
+                .trim_end_matches('/')
+                .to_string(),
+            modal_dispatch_token: required("MODAL_DISPATCH_TOKEN")?,
+            callback_base_url: required("COORDINATOR_CALLBACK_BASE_URL")?
+                .trim_end_matches('/')
+                .to_string(),
+            session_startup_timeout: duration_var(
+                "SESSION_STARTUP_TIMEOUT_SECS",
+                120,
+                ConfigError::InvalidSessionStartupTimeout,
+            )?,
+            session_max_duration: duration_var(
+                "SESSION_MAX_DURATION_SECS",
+                3600,
+                ConfigError::InvalidSessionMaxDuration,
+            )?,
+            session_cancel_grace: duration_var(
+                "SESSION_CANCEL_GRACE_SECS",
+                30,
+                ConfigError::InvalidSessionCancelGrace,
+            )?,
         })
     }
 
@@ -60,11 +81,33 @@ impl Config {
             livekit_api_key: "test-livekit-api-key".to_string(),
             livekit_api_secret: "test-livekit-secret".to_string(),
             worker_id: "wm-worker-1".to_string(),
-            heartbeat_ttl: Duration::from_secs(15),
+            modal_dispatch_base_url: "http://modal-dispatch.test".to_string(),
+            modal_dispatch_token: "test-modal-token".to_string(),
+            callback_base_url: "http://coordinator.test".to_string(),
+            session_startup_timeout: Duration::from_secs(120),
+            session_max_duration: Duration::from_secs(3600),
+            session_cancel_grace: Duration::from_secs(30),
         }
     }
 }
 
 fn required(name: &'static str) -> Result<String, ConfigError> {
     env::var(name).map_err(|_| ConfigError::MissingVar(name))
+}
+
+fn duration_var<F>(
+    name: &'static str,
+    default_secs: u64,
+    invalid: F,
+) -> Result<Duration, ConfigError>
+where
+    F: FnOnce(String) -> ConfigError + Copy,
+{
+    match env::var(name) {
+        Ok(raw) => {
+            let secs = u64::from_str(&raw).map_err(|err| invalid(err.to_string()))?;
+            Ok(Duration::from_secs(secs))
+        }
+        Err(_) => Ok(Duration::from_secs(default_secs)),
+    }
 }

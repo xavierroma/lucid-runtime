@@ -5,6 +5,7 @@ coordinator:
     pullPolicy: IfNotPresent
 
 worker:
+  enabled: false
   image:
     repository: lucid/worker
     tag: dev

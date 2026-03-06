@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use coordinator::{build_router, config::Config, run_heartbeat_monitor, AppContext};
+use coordinator::{build_router, config::Config, run_session_reconciler, AppContext};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ctx = AppContext::new(config);
     let app = build_router(ctx.clone());
 
-    tokio::spawn(run_heartbeat_monitor(ctx));
+    tokio::spawn(run_session_reconciler(ctx));
 
     let listener = TcpListener::bind(bind_addr).await?;
     tracing::info!(%bind_addr, "coordinator listening");
