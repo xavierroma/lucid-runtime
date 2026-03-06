@@ -37,12 +37,15 @@ async function parseError(response: Response) {
 }
 
 async function request<T>(path: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers)
+
+  if (demoEnv.coordinatorApiKey) {
+    headers.set("Authorization", `Bearer ${demoEnv.coordinatorApiKey}`)
+  }
+
   const response = await fetch(buildUrl(path), {
     ...init,
-    headers: {
-      Authorization: `Bearer ${demoEnv.coordinatorApiKey}`,
-      ...(init?.headers ?? {}),
-    },
+    headers,
   })
 
   if (!response.ok) {

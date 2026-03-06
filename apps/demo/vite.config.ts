@@ -6,6 +6,8 @@ import { defineConfig, loadEnv } from "vite"
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "")
   const proxyTarget = env.VITE_COORDINATOR_PROXY_TARGET?.trim()
+  const proxyApiKey =
+    env.COORDINATOR_API_KEY?.trim() || env.VITE_COORDINATOR_API_KEY?.trim()
 
   return {
     plugins: [react(), tailwindcss()],
@@ -16,13 +18,19 @@ export default defineConfig(({ mode }) => {
     },
     server: proxyTarget
       ? {
-          proxy: {
-            "/api": {
-              target: proxyTarget,
-              changeOrigin: true,
-            },
+        proxy: {
+          "/api": {
+            target: proxyTarget,
+            changeOrigin: true,
+            rewrite: (path) => path.replace(/^\/api/, ""),
+            headers: proxyApiKey
+              ? {
+                  Authorization: `Bearer ${proxyApiKey}`,
+                }
+              : undefined,
           },
-        }
+        },
+      }
       : undefined,
   }
 })
