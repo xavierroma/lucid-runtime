@@ -9,8 +9,9 @@ use uuid::Uuid;
 
 use crate::{
     auth, livekit_tokens,
-    models::{CreateSessionResponse, ErrorResponse},
-    state::RuntimeState,
+    modal_dispatch::LaunchSessionRequest,
+    models::{CreateSessionResponse, ErrorResponse, CONTROL_TOPIC, VIDEO_TRACK_NAME},
+    state::EndRequestError,
     AppContext,
 };
 
@@ -23,16 +24,21 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
-    let now = Instant::now();
-    let mut runtime = ctx.runtime.write().await;
-    runtime.expire_stale_worker(now, ctx.config.heartbeat_ttl);
-
-    if !runtime.can_create_session(now, ctx.config.heartbeat_ttl) {
-        return error_response(StatusCode::CONFLICT, "worker unavailable or busy");
+    {
+        let mut runtime = ctx.runtime.write().await;
+        runtime.reconcile_timeouts(
+            Instant::now(),
+            ctx.config.session_startup_timeout,
+            ctx.config.session_max_duration,
+            ctx.config.session_cancel_grace,
+        );
+        if !runtime.can_create_session() {
+            return error_response(StatusCode::CONFLICT, "active session in progress");
+        }
     }
 
     let session_id = Uuid::new_v4();
-    let room_name = RuntimeState::room_name_for(session_id);
+    let room_name = crate::state::RuntimeState::room_name_for(session_id);
 
     let client_access_token = match livekit_tokens::mint_access_token(
         &ctx.config.livekit_api_key,
@@ -64,14 +70,55 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
         }
     };
 
-    let session = runtime.create_assigned_session(session_id, worker_access_token.clone());
+    let function_call_id = match ctx
+        .modal_dispatch
+        .launch_session(LaunchSessionRequest {
+            session_id,
+            room_name: room_name.clone(),
+            worker_access_token: worker_access_token.clone(),
+            video_track_name: VIDEO_TRACK_NAME.to_string(),
+            control_topic: CONTROL_TOPIC.to_string(),
+            coordinator_base_url: ctx.config.callback_base_url.clone(),
+            coordinator_internal_token: ctx.config.worker_internal_token.clone(),
+        })
+        .await
+    {
+        Ok(function_call_id) => function_call_id,
+        Err(err) => {
+            tracing::error!(error = %err, session_id = %session_id, "modal launch failed");
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to dispatch session",
+            );
+        }
+    };
+
+    let session = {
+        let mut runtime = ctx.runtime.write().await;
+        runtime.reconcile_timeouts(
+            Instant::now(),
+            ctx.config.session_startup_timeout,
+            ctx.config.session_max_duration,
+            ctx.config.session_cancel_grace,
+        );
+        if !runtime.can_create_session() {
+            if let Err(err) = ctx.modal_dispatch.cancel_session(&function_call_id).await {
+                tracing::warn!(
+                    error = %err,
+                    function_call_id = %function_call_id,
+                    "failed to cancel modal call after coordinator conflict"
+                );
+            }
+            return error_response(StatusCode::CONFLICT, "active session in progress");
+        }
+        runtime.create_session(session_id, function_call_id, Instant::now())
+    };
 
     (
-        StatusCode::CREATED,
+        StatusCode::ACCEPTED,
         Json(CreateSessionResponse {
             session,
             client_access_token: Some(client_access_token),
-            worker_access_token: Some(worker_access_token),
         }),
     )
         .into_response()
@@ -111,10 +158,32 @@ pub async fn end_session(
         return error_response(StatusCode::NOT_FOUND, "session not found");
     };
 
-    let mut runtime = ctx.runtime.write().await;
-    let ended = runtime.request_end_session(&session_id);
-    if !ended {
-        return error_response(StatusCode::NOT_FOUND, "session not found");
+    let end_result = {
+        let mut runtime = ctx.runtime.write().await;
+        runtime.reconcile_timeouts(
+            Instant::now(),
+            ctx.config.session_startup_timeout,
+            ctx.config.session_max_duration,
+            ctx.config.session_cancel_grace,
+        );
+        runtime.request_end_session(&session_id, Instant::now())
+    };
+
+    let end_result = match end_result {
+        Ok(end_result) => end_result,
+        Err(EndRequestError::NotFound) => {
+            return error_response(StatusCode::NOT_FOUND, "session not found")
+        }
+    };
+
+    if let Some(function_call_id) = end_result.function_call_id {
+        if let Err(err) = ctx.modal_dispatch.cancel_session(&function_call_id).await {
+            tracing::warn!(
+                error = %err,
+                function_call_id = %function_call_id,
+                "failed to cancel modal function call"
+            );
+        }
     }
 
     StatusCode::OK.into_response()

@@ -20,4 +20,15 @@ if [[ "${WM_ENGINE:-fake}" == "yume" ]]; then
   done
 fi
 
-exec wm-worker --worker-id "${WORKER_ID:-wm-worker-1}"
+if [[ -z "${SESSION_ID:-}" || -z "${ROOM_NAME:-}" || -z "${WORKER_ACCESS_TOKEN:-}" ]]; then
+  echo "SESSION_ID, ROOM_NAME, and WORKER_ACCESS_TOKEN must be set for request-based worker execution" >&2
+  exit 1
+fi
+
+exec wm-worker \
+  --worker-id "${WORKER_ID:-wm-worker-1}" \
+  --session-id "${SESSION_ID}" \
+  --room-name "${ROOM_NAME}" \
+  --worker-access-token "${WORKER_ACCESS_TOKEN}" \
+  --video-track-name "${VIDEO_TRACK_NAME:-main_video}" \
+  --control-topic "${CONTROL_TOPIC:-wm.control.v1}"

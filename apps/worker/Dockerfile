@@ -28,7 +28,7 @@ COPY apps/worker /workspace/apps/worker
 
 RUN python3 -m pip install --no-cache-dir \
     torch torchvision --index-url https://download.pytorch.org/whl/cu121 && \
-    python3 -m pip install --no-cache-dir -e /workspace/apps/worker[livekit,yume]
+    python3 -m pip install --no-cache-dir -e /workspace/apps/worker[livekit,yume,modal]
 
 RUN chmod +x /workspace/apps/worker/scripts/start-worker.sh
 

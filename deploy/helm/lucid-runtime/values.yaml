@@ -22,106 +22,23 @@ coordinator:
       value: "replace-me"
     - name: WORKER_ID
       value: "wm-worker-1"
-    - name: HEARTBEAT_TTL_SECS
-      value: "15"
+    - name: MODAL_DISPATCH_BASE_URL
+      value: "https://replace-me.modal.run"
+    - name: MODAL_DISPATCH_TOKEN
+      value: "replace-me"
+    - name: COORDINATOR_CALLBACK_BASE_URL
+      value: "https://replace-me.coordinator.example.com"
+    - name: SESSION_STARTUP_TIMEOUT_SECS
+      value: "120"
+    - name: SESSION_MAX_DURATION_SECS
+      value: "3600"
+    - name: SESSION_CANCEL_GRACE_SECS
+      value: "30"
   resources: {}
 
 worker:
-  replicaCount: 1
-  strategy:
-    type: Recreate
+  enabled: false
   image:
     repository: lucid/worker
     tag: dev
     pullPolicy: IfNotPresent
-  command: []
-  env:
-    - name: WORKER_ID
-      value: "wm-worker-1"
-    - name: COORDINATOR_BASE_URL
-      value: "http://lucid-runtime-coordinator:8080"
-    - name: WORKER_INTERNAL_TOKEN
-      value: "replace-me"
-    - name: LIVEKIT_URL
-      value: "wss://replace-me.livekit.cloud"
-    - name: YUME_MODEL_DIR
-      value: "/models/Yume-5B-720P"
-    - name: HF_HOME
-      value: "/cache/huggingface"
-    - name: WM_ENGINE
-      value: "fake"
-    - name: WM_LIVEKIT_MODE
-      value: "fake"
-    - name: WM_FRAME_WIDTH
-      value: "1280"
-    - name: WM_FRAME_HEIGHT
-      value: "720"
-    - name: WM_TARGET_FPS
-      value: "16"
-    - name: WM_HEARTBEAT_INTERVAL_MS
-      value: "2000"
-    - name: WM_ASSIGNMENT_POLL_MS
-      value: "1000"
-    - name: YUME_CHUNK_FRAMES
-      value: "8"
-    - name: YUME_MAX_QUEUE_FRAMES
-      value: "32"
-    - name: WORKER_HEALTH_PORT
-      value: "8090"
-  initContainers:
-    - name: verify-model-path
-      image: alpine:3.20
-      command:
-        - /bin/sh
-        - -c
-        - |
-          mkdir -p /models /cache/huggingface
-      volumeMounts:
-        - name: model-volume
-          mountPath: /models
-        - name: hf-cache
-          mountPath: /cache/huggingface
-  healthPort: 8090
-  startupProbe:
-    httpGet:
-      path: /readyz
-      port: health
-    failureThreshold: 60
-    periodSeconds: 5
-  readinessProbe:
-    httpGet:
-      path: /readyz
-      port: health
-    initialDelaySeconds: 5
-    periodSeconds: 5
-  livenessProbe:
-    httpGet:
-      path: /healthz
-      port: health
-    initialDelaySeconds: 10
-    periodSeconds: 10
-  terminationGracePeriodSeconds: 60
-  preStopSleepSeconds: 5
-  runtimeClassName: ""
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  volumes:
-    - name: model-volume
-      emptyDir: {}
-    - name: hf-cache
-      emptyDir: {}
-  volumeMounts:
-    - name: model-volume
-      mountPath: /models
-    - name: hf-cache
-      mountPath: /cache/huggingface
-  resources:
-    requests:
-      cpu: "1"
-      memory: "4Gi"
-      nvidia.com/gpu: "1"
-    limits:
-      cpu: "2"
-      memory: "8Gi"
-      nvidia.com/gpu: "1"

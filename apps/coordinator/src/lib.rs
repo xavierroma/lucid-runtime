@@ -3,6 +3,7 @@ pub mod api_public;
 pub mod auth;
 pub mod config;
 pub mod livekit_tokens;
+pub mod modal_dispatch;
 pub mod models;
 pub mod state;
 
@@ -15,20 +16,36 @@ use tokio::{
 };
 
 use config::Config;
+use modal_dispatch::{HttpModalDispatchClient, ModalDispatch};
 use state::RuntimeState;
 
 #[derive(Clone)]
 pub struct AppContext {
     pub config: Config,
     pub runtime: Arc<RwLock<RuntimeState>>,
+    pub modal_dispatch: Arc<dyn ModalDispatch>,
 }
 
 impl AppContext {
     pub fn new(config: Config) -> Self {
-        let runtime = RuntimeState::new(config.worker_id.clone());
+        let runtime = RuntimeState::new();
+        let modal_dispatch = HttpModalDispatchClient::new(
+            config.modal_dispatch_base_url.clone(),
+            config.modal_dispatch_token.clone(),
+        );
         Self {
             config,
             runtime: Arc::new(RwLock::new(runtime)),
+            modal_dispatch: Arc::new(modal_dispatch),
+        }
+    }
+
+    pub fn with_modal_dispatch(config: Config, modal_dispatch: Arc<dyn ModalDispatch>) -> Self {
+        let runtime = RuntimeState::new();
+        Self {
+            config,
+            runtime: Arc::new(RwLock::new(runtime)),
+            modal_dispatch,
         }
     }
 }
@@ -45,18 +62,6 @@ pub fn build_router(ctx: AppContext) -> Router {
             axum::routing::get(api_public::get_session).post(api_public::end_session),
         )
         .route(
-            "/internal/v1/worker/register",
-            axum::routing::post(api_internal::register_worker),
-        )
-        .route(
-            "/internal/v1/worker/heartbeat",
-            axum::routing::post(api_internal::heartbeat_worker),
-        )
-        .route(
-            "/internal/v1/worker/assignment",
-            axum::routing::get(api_internal::get_assignment),
-        )
-        .route(
             "/internal/v1/sessions/:session_id/running",
             axum::routing::post(api_internal::mark_running),
         )
@@ -67,20 +72,29 @@ pub fn build_router(ctx: AppContext) -> Router {
         .with_state(ctx)
 }
 
-pub async fn run_heartbeat_monitor(ctx: AppContext) {
+pub async fn run_session_reconciler(ctx: AppContext) {
     let mut ticker = interval(std::time::Duration::from_secs(1));
 
     loop {
         ticker.tick().await;
         let mut runtime = ctx.runtime.write().await;
-        runtime.expire_stale_worker(Instant::now(), ctx.config.heartbeat_ttl);
+        runtime.reconcile_timeouts(
+            Instant::now(),
+            ctx.config.session_startup_timeout,
+            ctx.config.session_max_duration,
+            ctx.config.session_cancel_grace,
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
 
+    use async_trait::async_trait;
     use axum::{
         body::{to_bytes, Body},
         http::{
@@ -96,13 +110,76 @@ mod tests {
     use crate::{
         build_router,
         config::Config,
+        modal_dispatch::{LaunchSessionRequest, ModalDispatch, ModalDispatchError},
         models::{CreateSessionResponse, SessionState},
         AppContext,
     };
 
-    fn test_app() -> (Router, Config) {
+    #[derive(Default)]
+    struct FakeModalDispatch {
+        launch_ids: Mutex<VecDeque<String>>,
+        launched_sessions: Mutex<Vec<Uuid>>,
+        canceled_calls: Mutex<Vec<String>>,
+        fail_launch: Mutex<bool>,
+    }
+
+    impl FakeModalDispatch {
+        fn with_ids(ids: &[&str]) -> Self {
+            Self {
+                launch_ids: Mutex::new(ids.iter().map(|id| id.to_string()).collect()),
+                launched_sessions: Mutex::new(Vec::new()),
+                canceled_calls: Mutex::new(Vec::new()),
+                fail_launch: Mutex::new(false),
+            }
+        }
+
+        fn launched_count(&self) -> usize {
+            self.launched_sessions
+                .lock()
+                .expect("launch sessions lock")
+                .len()
+        }
+
+        fn canceled_count(&self) -> usize {
+            self.canceled_calls.lock().expect("cancel calls lock").len()
+        }
+    }
+
+    #[async_trait]
+    impl ModalDispatch for FakeModalDispatch {
+        async fn launch_session(
+            &self,
+            payload: LaunchSessionRequest,
+        ) -> Result<String, ModalDispatchError> {
+            self.launched_sessions
+                .lock()
+                .expect("launch sessions lock")
+                .push(payload.session_id);
+            if *self.fail_launch.lock().expect("fail launch lock") {
+                return Err(ModalDispatchError::Transport(
+                    "forced launch failure".to_string(),
+                ));
+            }
+            Ok(self
+                .launch_ids
+                .lock()
+                .expect("launch ids lock")
+                .pop_front()
+                .unwrap_or_else(|| "call-default".to_string()))
+        }
+
+        async fn cancel_session(&self, function_call_id: &str) -> Result<(), ModalDispatchError> {
+            self.canceled_calls
+                .lock()
+                .expect("cancel calls lock")
+                .push(function_call_id.to_string());
+            Ok(())
+        }
+    }
+
+    fn test_app(fake_dispatch: Arc<FakeModalDispatch>) -> (Router, Config) {
         let config = Config::for_tests();
-        let ctx = AppContext::new(config.clone());
+        let ctx = AppContext::with_modal_dispatch(config.clone(), fake_dispatch);
         (build_router(ctx), config)
     }
 
@@ -111,29 +188,6 @@ mod tests {
             .await
             .expect("response body should be readable");
         serde_json::from_slice(&body).expect("response body should be JSON")
-    }
-
-    async fn register_worker(app: &Router, config: &Config) {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/internal/v1/worker/register")
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({ "worker_id": config.worker_id }).to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-
-        assert_eq!(response.status(), StatusCode::OK);
     }
 
     async fn create_session(app: &Router, config: &Config) -> (StatusCode, CreateSessionResponse) {
@@ -154,16 +208,15 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body should be readable");
-
         let payload = serde_json::from_slice::<CreateSessionResponse>(&body)
             .expect("create session body should decode");
-
         (status, payload)
     }
 
     #[tokio::test]
     async fn healthz_is_public() {
-        let (app, _) = test_app();
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, _) = test_app(fake_dispatch);
 
         let response = app
             .oneshot(
@@ -180,64 +233,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn public_endpoints_require_auth() {
-        let (app, _) = test_app();
-        let session_id = Uuid::new_v4();
-
-        let create = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/v1/sessions")
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(create.status(), StatusCode::UNAUTHORIZED);
-
-        let get = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!("/v1/sessions/{session_id}"))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(get.status(), StatusCode::UNAUTHORIZED);
-
-        let end = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/v1/sessions/{session_id}:end"))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(end.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn create_session_success_and_busy_conflict() {
-        let (app, config) = test_app();
-        register_worker(&app, &config).await;
+    async fn create_session_returns_accepted_and_conflicts_when_busy() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1", "call-2"]));
+        let (app, config) = test_app(fake_dispatch.clone());
 
         let (status, payload) = create_session(&app, &config).await;
-        assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(payload.session.state, SessionState::Assigned);
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(payload.session.state, SessionState::Created);
         assert!(payload.client_access_token.is_some());
-        assert!(payload.worker_access_token.is_some());
         assert!(payload
             .session
             .room_name
             .starts_with(&format!("wm-{}", payload.session.session_id)));
+        assert_eq!(fake_dispatch.launched_count(), 1);
 
         let second = app
             .clone()
@@ -253,23 +261,43 @@ mod tests {
             .expect("request should succeed");
 
         assert_eq!(second.status(), StatusCode::CONFLICT);
+        assert_eq!(fake_dispatch.launched_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_session_returns_server_error_on_launch_failure() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        *fake_dispatch.fail_launch.lock().expect("fail launch lock") = true;
+        let (app, config) = test_app(fake_dispatch);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/v1/sessions")
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
     async fn get_session_returns_found_and_not_found() {
-        let (app, config) = test_app();
-        register_worker(&app, &config).await;
-        let (_, create_payload) = create_session(&app, &config).await;
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, config) = test_app(fake_dispatch);
+        let (_, created) = create_session(&app, &config).await;
 
         let found = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!(
-                        "/v1/sessions/{}",
-                        create_payload.session.session_id
-                    ))
+                    .uri(format!("/v1/sessions/{}", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -294,59 +322,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn end_session_is_idempotent_for_existing_session() {
-        let (app, config) = test_app();
-        register_worker(&app, &config).await;
-        let (_, create_payload) = create_session(&app, &config).await;
-
-        let assignment = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/internal/v1/worker/assignment?worker_id={}",
-                        config.worker_id
-                    ))
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(assignment.status(), StatusCode::OK);
-
-        let running = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!(
-                        "/internal/v1/sessions/{}/running",
-                        create_payload.session.session_id
-                    ))
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(running.status(), StatusCode::OK);
-
-        let end_uri = format!("/v1/sessions/{}:end", create_payload.session.session_id);
+    async fn end_session_is_idempotent_and_best_effort_cancels_modal_job() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, config) = test_app(fake_dispatch.clone());
+        let (_, created) = create_session(&app, &config).await;
 
         let first_end = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(&end_uri)
+                    .uri(format!("/v1/sessions/{}:end", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -354,13 +340,14 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(first_end.status(), StatusCode::OK);
+        assert_eq!(fake_dispatch.canceled_count(), 1);
 
         let second_end = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(&end_uri)
+                    .uri(format!("/v1/sessions/{}:end", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -368,163 +355,14 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(second_end.status(), StatusCode::OK);
-
-        let create_while_cancel_pending = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/v1/sessions")
-                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(create_while_cancel_pending.status(), StatusCode::CONFLICT);
-
-        let worker_ack_end = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!(
-                        "/internal/v1/sessions/{}/ended",
-                        create_payload.session.session_id
-                    ))
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from("{}"))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(worker_ack_end.status(), StatusCode::OK);
-
-        let create_after_worker_ack = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/v1/sessions")
-                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(create_after_worker_ack.status(), StatusCode::CREATED);
-
-        let missing = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!("/v1/sessions/{}:end", Uuid::new_v4()))
-                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(fake_dispatch.canceled_count(), 1);
     }
 
     #[tokio::test]
-    async fn internal_endpoints_require_auth() {
-        let (app, _) = test_app();
-
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/internal/v1/worker/register")
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"worker_id":"wm-worker-1"}"#))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn assignment_lifecycle_and_running_transition() {
-        let (app, config) = test_app();
-        register_worker(&app, &config).await;
-
-        let no_assignment = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/internal/v1/worker/assignment?worker_id={}",
-                        config.worker_id
-                    ))
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(no_assignment.status(), StatusCode::NO_CONTENT);
-
-        let (_, create_payload) = create_session(&app, &config).await;
-
-        let assignment = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/internal/v1/worker/assignment?worker_id={}",
-                        config.worker_id
-                    ))
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(assignment.status(), StatusCode::OK);
-
-        let assignment_payload = read_json(assignment).await;
-        assert_eq!(
-            assignment_payload["session_id"],
-            create_payload.session.session_id.to_string()
-        );
-
-        let second_poll = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/internal/v1/worker/assignment?worker_id={}",
-                        config.worker_id
-                    ))
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(second_poll.status(), StatusCode::NO_CONTENT);
+    async fn internal_callbacks_transition_to_running_and_ended() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, config) = test_app(fake_dispatch);
+        let (_, created) = create_session(&app, &config).await;
 
         let running = app
             .clone()
@@ -533,7 +371,7 @@ mod tests {
                     .method(Method::POST)
                     .uri(format!(
                         "/internal/v1/sessions/{}/running",
-                        create_payload.session.session_id
+                        created.session.session_id
                     ))
                     .header(
                         AUTHORIZATION,
@@ -545,100 +383,6 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(running.status(), StatusCode::OK);
-
-        let get = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/v1/sessions/{}",
-                        create_payload.session.session_id
-                    ))
-                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(get.status(), StatusCode::OK);
-
-        let get_payload = read_json(get).await;
-        assert_eq!(get_payload["state"], "RUNNING");
-    }
-
-    #[tokio::test]
-    async fn heartbeat_reports_cancel_signal_after_public_end() {
-        let (app, config) = test_app();
-        register_worker(&app, &config).await;
-        let (_, create_payload) = create_session(&app, &config).await;
-
-        let _assignment = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(format!(
-                        "/internal/v1/worker/assignment?worker_id={}",
-                        config.worker_id
-                    ))
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-
-        let end = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(format!(
-                        "/v1/sessions/{}:end",
-                        create_payload.session.session_id
-                    ))
-                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(end.status(), StatusCode::OK);
-
-        let heartbeat = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/internal/v1/worker/heartbeat")
-                    .header(
-                        AUTHORIZATION,
-                        format!("Bearer {}", config.worker_internal_token),
-                    )
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(
-                        json!({ "worker_id": config.worker_id }).to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(heartbeat.status(), StatusCode::OK);
-
-        let payload = read_json(heartbeat).await;
-        assert_eq!(payload["status"], "ok");
-        assert_eq!(payload["cancel_active_session"], true);
-    }
-
-    #[tokio::test]
-    async fn internal_ended_releases_worker_for_new_session() {
-        let (app, config) = test_app();
-        register_worker(&app, &config).await;
-        let (_, create_payload) = create_session(&app, &config).await;
 
         let ended = app
             .clone()
@@ -647,7 +391,7 @@ mod tests {
                     .method(Method::POST)
                     .uri(format!(
                         "/internal/v1/sessions/{}/ended",
-                        create_payload.session.session_id
+                        created.session.session_id
                     ))
                     .header(
                         AUTHORIZATION,
@@ -655,7 +399,7 @@ mod tests {
                     )
                     .header(CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        json!({"error_code": "MODEL_RUNTIME_ERROR"}).to_string(),
+                        json!({ "error_code": "MODEL_RUNTIME_ERROR" }).to_string(),
                     ))
                     .expect("request should build"),
             )
@@ -668,36 +412,35 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!(
-                        "/v1/sessions/{}",
-                        create_payload.session.session_id
-                    ))
+                    .uri(format!("/v1/sessions/{}", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
             )
             .await
             .expect("request should succeed");
-
         let payload = read_json(get).await;
         assert_eq!(payload["state"], "ENDED");
         assert_eq!(payload["error_code"], "MODEL_RUNTIME_ERROR");
+    }
 
-        tokio::time::sleep(Duration::from_millis(5)).await;
+    #[tokio::test]
+    async fn internal_routes_require_auth() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, _) = test_app(fake_dispatch);
+        let session_id = Uuid::new_v4();
 
-        let second = app
+        let running = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/v1/sessions")
-                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .uri(format!("/internal/v1/sessions/{session_id}/running"))
                     .body(Body::empty())
                     .expect("request should build"),
             )
             .await
             .expect("request should succeed");
-
-        assert_eq!(second.status(), StatusCode::CREATED);
+        assert_eq!(running.status(), StatusCode::UNAUTHORIZED);
     }
 }
