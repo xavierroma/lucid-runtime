@@ -1,7 +1,9 @@
 const trim = (value: string | undefined) => value?.trim() ?? ""
 
 const explicitCoordinatorBaseUrl = trim(import.meta.env.VITE_COORDINATOR_BASE_URL)
-const devProxyBaseUrl = import.meta.env.DEV ? "/api" : ""
+const proxyTarget = trim(import.meta.env.VITE_COORDINATOR_PROXY_TARGET)
+const devProxyBaseUrl =
+  import.meta.env.DEV && !explicitCoordinatorBaseUrl && proxyTarget ? "/api" : ""
 
 export const demoEnv = {
   coordinatorApiKey: trim(import.meta.env.VITE_COORDINATOR_API_KEY),
@@ -14,8 +16,10 @@ export const demoEnv = {
 
 export function getMissingConfig(): string[] {
   const missing: string[] = []
+  const usingDirectCoordinator = Boolean(explicitCoordinatorBaseUrl)
+  const usingProxyCoordinator = Boolean(devProxyBaseUrl)
 
-  if (!demoEnv.coordinatorApiKey) {
+  if (usingDirectCoordinator && !demoEnv.coordinatorApiKey) {
     missing.push("VITE_COORDINATOR_API_KEY")
   }
   if (!demoEnv.livekitUrl) {
@@ -23,6 +27,9 @@ export function getMissingConfig(): string[] {
   }
   if (!demoEnv.coordinatorBaseUrl) {
     missing.push("VITE_COORDINATOR_BASE_URL or VITE_COORDINATOR_PROXY_TARGET")
+  }
+  if (import.meta.env.DEV && !usingDirectCoordinator && !usingProxyCoordinator) {
+    missing.push("VITE_COORDINATOR_PROXY_TARGET")
   }
 
   return missing
