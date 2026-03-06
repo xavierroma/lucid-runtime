@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Protocol
 
 import numpy as np
@@ -46,15 +45,17 @@ class FakeLiveKitAdapter:
         _ = frame
 
     async def recv_control(self, timeout_s: float) -> bytes | None:
-        deadline = time.monotonic() + max(timeout_s, 0.0)
-        while True:
+        timeout_s = max(timeout_s, 0.0)
+        if timeout_s == 0:
             try:
                 return self._controls.get_nowait()
             except asyncio.QueueEmpty:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                await asyncio.sleep(min(remaining, 0.01))
+                return None
+
+        try:
+            return await asyncio.wait_for(self._controls.get(), timeout=timeout_s)
+        except TimeoutError:
+            return None
 
     async def send_status(self, payload: bytes) -> None:
         _ = payload
@@ -163,15 +164,17 @@ class RealLiveKitAdapter:
             )
 
     async def recv_control(self, timeout_s: float) -> bytes | None:
-        deadline = time.monotonic() + max(timeout_s, 0.0)
-        while True:
+        timeout_s = max(timeout_s, 0.0)
+        if timeout_s == 0:
             try:
                 return self._control_queue.get_nowait()
             except asyncio.QueueEmpty:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                await asyncio.sleep(min(remaining, 0.01))
+                return None
+
+        try:
+            return await asyncio.wait_for(self._control_queue.get(), timeout=timeout_s)
+        except TimeoutError:
+            return None
 
     async def send_status(self, payload: bytes) -> None:
         if self._room is None:

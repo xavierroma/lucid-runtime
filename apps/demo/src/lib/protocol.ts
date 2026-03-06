@@ -4,7 +4,6 @@ const decoder = new TextDecoder()
 export type ControlMessageType = "set_prompt" | "end" | "ping"
 export type StatusMessageType =
   | "started"
-  | "busy"
   | "frame_metrics"
   | "error"
   | "ended"

@@ -15,7 +15,6 @@ from wm_worker.models import FrameMetrics
 @dataclass(slots=True)
 class _FrameItem:
     frame: np.ndarray
-    enqueued_at: float
 
 
 class FramePipeline:
@@ -37,19 +36,21 @@ class FramePipeline:
                 self._dropped_frames += 1
             except asyncio.QueueEmpty:
                 pass
-        await self._queue.put(_FrameItem(frame=frame, enqueued_at=time.monotonic()))
+        await self._queue.put(_FrameItem(frame=frame))
         self._inference_ms.append(inference_ms)
 
     async def pop(self, timeout_s: float) -> np.ndarray | None:
-        deadline = time.monotonic() + max(timeout_s, 0.0)
-        while True:
+        timeout_s = max(timeout_s, 0.0)
+        if timeout_s == 0:
             try:
                 return self._queue.get_nowait().frame
             except asyncio.QueueEmpty:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                await asyncio.sleep(min(remaining, 0.01))
+                return None
+
+        try:
+            return (await asyncio.wait_for(self._queue.get(), timeout=timeout_s)).frame
+        except TimeoutError:
+            return None
 
     async def publish_loop(
         self,

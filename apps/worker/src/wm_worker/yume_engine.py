@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wm_worker.config import WorkerConfig
+from wm_worker.config import RuntimeConfig
 from wm_worker.models import ActionPayload, ActionSnapshot
 from wm_worker.yume_prompt import compose_yume_prompt
 
@@ -23,7 +23,7 @@ class ChunkResult:
 
 
 class YumeEngine:
-    def __init__(self, config: WorkerConfig, logger: logging.Logger) -> None:
+    def __init__(self, config: RuntimeConfig, logger: logging.Logger) -> None:
         self._config = config
         self._logger = logger
         self._frame_idx = 0
