@@ -90,8 +90,7 @@ class WorkerConfig:
             yume_base_prompt=os.getenv(
                 "YUME_BASE_PROMPT",
                 (
-                    "A realistic explorable world with clear depth, coherent geometry, "
-                    "and natural motion."
+                    "POV of a character walking in a minecraft scene"
                 ),
             ).strip(),
             wm_engine=os.getenv("WM_ENGINE", "fake").strip().lower(),
