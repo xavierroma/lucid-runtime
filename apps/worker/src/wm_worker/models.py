@@ -5,13 +5,6 @@ from enum import Enum
 from typing import Any
 
 
-class WorkerLifecycleState(str, Enum):
-    BOOTING = "BOOTING"
-    IDLE = "IDLE"
-    BUSY = "BUSY"
-    STOPPING = "STOPPING"
-
-
 class ControlMessageType(str, Enum):
     ACTION = "action"
     SET_PROMPT = "set_prompt"
@@ -21,7 +14,6 @@ class ControlMessageType(str, Enum):
 
 class StatusMessageType(str, Enum):
     STARTED = "started"
-    BUSY = "busy"
     FRAME_METRICS = "frame_metrics"
     ERROR = "error"
     ENDED = "ended"

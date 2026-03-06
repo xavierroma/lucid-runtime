@@ -11,6 +11,7 @@ pub const CANCEL_ENDPOINT: &str = "/cancel";
 pub struct LaunchSessionRequest {
     pub session_id: Uuid,
     pub room_name: String,
+    pub worker_id: String,
     pub worker_access_token: String,
     pub video_track_name: String,
     pub control_topic: String,

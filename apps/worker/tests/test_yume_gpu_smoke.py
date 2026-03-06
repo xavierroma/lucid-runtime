@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from wm_worker.config import WorkerConfig
+from wm_worker.config import RuntimeConfig
 from wm_worker.yume_engine import YumeEngine
 
 
@@ -41,7 +41,7 @@ async def test_yume_gpu_smoke_real_model(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("WM_FRAME_WIDTH", "1280")
     monkeypatch.setenv("WM_FRAME_HEIGHT", "704")
 
-    config = WorkerConfig.from_env(worker_id_override="wm-worker-gpu-test")
+    config = RuntimeConfig.from_env()
     engine = YumeEngine(config, logging.getLogger("tests.yume_gpu_smoke"))
 
     await engine.load()

@@ -7,7 +7,7 @@ import asyncio
 import logging
 import sys
 
-from wm_worker.config import ConfigError, WorkerConfig
+from wm_worker.config import ConfigError, RuntimeConfig, SessionConfig
 from wm_worker.models import Assignment
 from wm_worker.session_runner import SessionRunner
 
@@ -35,7 +35,8 @@ def _configure_logging(level: str) -> None:
 async def _async_main(args: argparse.Namespace) -> int:
     logger = logging.getLogger("wm_worker")
     try:
-        config = WorkerConfig.from_env(worker_id_override=args.worker_id)
+        runtime_config = RuntimeConfig.from_env()
+        session_config = SessionConfig.from_env(worker_id_override=args.worker_id)
     except ConfigError as exc:
         logger.error("invalid configuration: %s", exc)
         return 2
@@ -48,7 +49,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         control_topic=args.control_topic,
     )
 
-    runner = SessionRunner(config, logger)
+    runner = SessionRunner(runtime_config, session_config, logger)
     try:
         await runner.run_session(assignment)
     finally:

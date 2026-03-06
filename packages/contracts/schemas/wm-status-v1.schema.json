@@ -10,7 +10,7 @@
     },
     "type": {
       "type": "string",
-      "enum": ["started", "busy", "frame_metrics", "error", "ended", "pong"]
+      "enum": ["started", "frame_metrics", "error", "ended", "pong"]
     },
     "seq": {
       "type": "integer",

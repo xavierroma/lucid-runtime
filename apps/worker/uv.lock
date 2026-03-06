@@ -2688,7 +2688,6 @@ name = "wm-worker"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aiohttp" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -2728,7 +2727,6 @@ yume = [
 [package.metadata]
 requires-dist = [
     { name = "accelerate", marker = "extra == 'yume'", specifier = "==1.0.1" },
-    { name = "aiohttp", specifier = ">=3.10,<4" },
     { name = "av", marker = "extra == 'livekit'", specifier = ">=13,<14" },
     { name = "decord", marker = "extra == 'yume'", specifier = ">=0.6,<0.7" },
     { name = "diffusers", marker = "extra == 'yume'", specifier = ">=0.32,<0.33" },

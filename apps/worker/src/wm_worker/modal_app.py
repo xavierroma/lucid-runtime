@@ -7,13 +7,12 @@ import json
 import logging
 import os
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import modal
 
-from wm_worker.config import WorkerConfig
+from wm_worker.config import RuntimeConfig, SessionConfig
 from wm_worker.modal_dispatch_api import LaunchRequest, create_app
 from wm_worker.models import Assignment
 from wm_worker.session_runner import SessionRunner
@@ -116,8 +115,6 @@ runtime_secret = _env_secret(
     "HF_TOKEN",
     "WM_ENGINE",
     "WM_LIVEKIT_MODE",
-    "WORKER_ID",
-    "WM_CONTROL_TOPIC",
     "WM_STATUS_TOPIC",
     "WM_FRAME_WIDTH",
     "WM_FRAME_HEIGHT",
@@ -134,22 +131,8 @@ def _build_logger() -> logging.Logger:
     return logger
 
 
-def _load_base_config(worker_id_override: str | None = None) -> WorkerConfig:
-    previous_base_url = os.environ.get("COORDINATOR_BASE_URL")
-    previous_internal_token = os.environ.get("WORKER_INTERNAL_TOKEN")
-    try:
-        os.environ["COORDINATOR_BASE_URL"] = previous_base_url or "https://placeholder.invalid"
-        os.environ["WORKER_INTERNAL_TOKEN"] = previous_internal_token or "placeholder-token"
-        return WorkerConfig.from_env(worker_id_override=worker_id_override)
-    finally:
-        if previous_base_url is None:
-            os.environ.pop("COORDINATOR_BASE_URL", None)
-        else:
-            os.environ["COORDINATOR_BASE_URL"] = previous_base_url
-        if previous_internal_token is None:
-            os.environ.pop("WORKER_INTERNAL_TOKEN", None)
-        else:
-            os.environ["WORKER_INTERNAL_TOKEN"] = previous_internal_token
+def _load_runtime_config() -> RuntimeConfig:
+    return RuntimeConfig.from_env()
 
 
 def _encode_jwt(payload: dict[str, Any], secret: str) -> str:
@@ -233,16 +216,15 @@ class WarmSessionWorker:
     async def load(self) -> None:
         started = time.perf_counter()
         self._logger = _build_logger()
-        self._base_config = _load_base_config()
-        self._engine = YumeEngine(self._base_config, self._logger)
+        self._runtime_config = _load_runtime_config()
+        self._engine = YumeEngine(self._runtime_config, self._logger)
         await self._engine.load()
         self._logger.info(
             (
-                "warm session worker ready worker_id=%s wm_engine=%s "
+                "warm session worker ready wm_engine=%s "
                 "min_containers=%s scaledown_window_secs=%s init_ms=%.2f"
             ),
-            self._base_config.worker_id,
-            self._base_config.wm_engine,
+            self._runtime_config.wm_engine,
             MODAL_MIN_CONTAINERS,
             MODAL_SCALEDOWN_WINDOW_SECS,
             (time.perf_counter() - started) * 1000,
@@ -251,14 +233,14 @@ class WarmSessionWorker:
     @modal.method()
     async def run_session(self, payload: dict[str, Any]) -> None:
         request = LaunchRequest.model_validate(payload)
-        config = replace(
-            self._base_config,
+        session_config = SessionConfig.from_values(
             worker_id=request.worker_id,
             coordinator_base_url=request.coordinator_base_url,
             worker_internal_token=request.coordinator_internal_token,
         )
         runner = SessionRunner(
-            config,
+            self._runtime_config,
+            session_config,
             self._logger,
             engine=self._engine,
         )

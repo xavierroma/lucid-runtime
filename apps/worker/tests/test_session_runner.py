@@ -9,7 +9,7 @@ import httpx
 import numpy as np
 import pytest
 
-from wm_worker.config import WorkerConfig
+from wm_worker.config import RuntimeConfig, SessionConfig
 from wm_worker.coordinator_client import CoordinatorClient
 from wm_worker.models import Assignment
 from wm_worker.session_runner import SessionRunner
@@ -98,14 +98,16 @@ async def test_session_runner_calls_running_and_ended(worker_env: None) -> None:
         worker_internal_token="test-token",
         transport=transport,
     )
-    config = WorkerConfig.from_env(worker_id_override="wm-worker-test")
+    runtime_config = RuntimeConfig.from_env()
+    session_config = SessionConfig.from_env(worker_id_override="wm-worker-test")
     end_message = (
         b'{"v":"v1","type":"end","seq":1,"ts_ms":10,'
         b'"session_id":"session-1","payload":{}}'
     )
     adapter = StubLiveKitAdapter(control_messages=[end_message])
     runner = SessionRunner(
-        config,
+        runtime_config,
+        session_config,
         logging.getLogger("tests.session_runner"),
         coordinator=coordinator,
         livekit_factory=lambda: adapter,
@@ -148,9 +150,11 @@ async def test_session_runner_reports_error_when_connect_fails(worker_env: None)
         worker_internal_token="test-token",
         transport=transport,
     )
-    config = WorkerConfig.from_env(worker_id_override="wm-worker-test")
+    runtime_config = RuntimeConfig.from_env()
+    session_config = SessionConfig.from_env(worker_id_override="wm-worker-test")
     runner = SessionRunner(
-        config,
+        runtime_config,
+        session_config,
         logging.getLogger("tests.session_runner"),
         coordinator=coordinator,
         livekit_factory=lambda: StubLiveKitAdapter(fail_connect=True),
@@ -195,9 +199,11 @@ async def test_session_runner_treats_modal_input_cancellation_as_clean_end(
         worker_internal_token="test-token",
         transport=transport,
     )
-    config = WorkerConfig.from_env(worker_id_override="wm-worker-test")
+    runtime_config = RuntimeConfig.from_env()
+    session_config = SessionConfig.from_env(worker_id_override="wm-worker-test")
     runner = SessionRunner(
-        config,
+        runtime_config,
+        session_config,
         logging.getLogger("tests.session_runner"),
         coordinator=coordinator,
         livekit_factory=lambda: StubLiveKitAdapter(),

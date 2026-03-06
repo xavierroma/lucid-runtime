@@ -75,6 +75,7 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
         .launch_session(LaunchSessionRequest {
             session_id,
             room_name: room_name.clone(),
+            worker_id: ctx.config.worker_id.clone(),
             worker_access_token: worker_access_token.clone(),
             video_track_name: VIDEO_TRACK_NAME.to_string(),
             control_topic: CONTROL_TOPIC.to_string(),
