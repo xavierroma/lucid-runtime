@@ -89,3 +89,9 @@ pub struct RuntimeEndedRequest {
     #[serde(default)]
     pub end_reason: Option<SessionEndReason>,
 }
+
+#[derive(Clone, Debug, Deserialize, Default)]
+pub struct CreateSessionRequest {
+    #[serde(default)]
+    pub model_name: Option<String>,
+}

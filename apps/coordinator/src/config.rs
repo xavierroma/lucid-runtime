@@ -9,6 +9,7 @@ pub struct Config {
     pub worker_internal_token: String,
     pub livekit_api_key: String,
     pub livekit_api_secret: String,
+    pub model_name: String,
     pub worker_id: String,
     pub modal_dispatch_base_url: String,
     pub modal_dispatch_token: String,
@@ -50,6 +51,10 @@ impl Config {
             worker_internal_token: required("WORKER_INTERNAL_TOKEN")?,
             livekit_api_key: required("LIVEKIT_API_KEY")?,
             livekit_api_secret: required("LIVEKIT_API_SECRET")?,
+            model_name: env::var("WM_MODEL_NAME")
+                .unwrap_or_else(|_| "yume".to_string())
+                .trim()
+                .to_lowercase(),
             worker_id: env::var("WORKER_ID").unwrap_or_else(|_| "wm-worker-1".to_string()),
             modal_dispatch_base_url: required("MODAL_DISPATCH_BASE_URL")?
                 .trim_end_matches('/')
@@ -88,6 +93,7 @@ impl Config {
             worker_internal_token: "test-internal-key".to_string(),
             livekit_api_key: "test-livekit-api-key".to_string(),
             livekit_api_secret: "test-livekit-secret".to_string(),
+            model_name: "yume".to_string(),
             worker_id: "wm-worker-1".to_string(),
             modal_dispatch_base_url: "http://modal-dispatch.test".to_string(),
             modal_dispatch_token: "test-modal-token".to_string(),

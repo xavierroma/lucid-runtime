@@ -1,0 +1,10 @@
+model:
+  name: waypoint
+  description: Waypoint 1.1 small first-person world model
+prompt:
+  default: "An explorable world with coherent geometry, stable lighting, and smooth forward motion."
+outputs:
+  main_video:
+    width: 640
+    height: 360
+    fps: 20

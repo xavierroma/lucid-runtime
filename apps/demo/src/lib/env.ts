@@ -4,11 +4,16 @@ const explicitCoordinatorBaseUrl = trim(import.meta.env.VITE_COORDINATOR_BASE_UR
 const proxyTarget = trim(import.meta.env.VITE_COORDINATOR_PROXY_TARGET)
 const devProxyBaseUrl =
   import.meta.env.DEV && !explicitCoordinatorBaseUrl && proxyTarget ? "/api" : ""
+const defaultModel =
+  trim(import.meta.env.VITE_DEFAULT_MODEL).toLowerCase() === "waypoint"
+    ? ("waypoint" as const)
+    : ("yume" as const)
 
 export const demoEnv = {
   coordinatorApiKey: trim(import.meta.env.VITE_COORDINATOR_API_KEY),
   coordinatorBaseUrl: explicitCoordinatorBaseUrl || devProxyBaseUrl,
   livekitUrl: trim(import.meta.env.VITE_LIVEKIT_URL),
+  defaultModel,
 }
 
 export function getMissingConfig(): string[] {

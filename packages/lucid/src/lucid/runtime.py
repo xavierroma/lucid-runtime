@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any, get_type_hints
 
 import numpy as np
@@ -515,7 +516,22 @@ class LucidRuntime:
         return cls(definition=definition, model=model, logger=logger)
 
     async def load(self) -> None:
-        await self.model.load()
+        start = perf_counter()
+        try:
+            await self.model.load()
+        except Exception as exc:
+            self.logger.error(
+                "lucid.runtime.load failed duration_ms=%.1f model=%s error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                self.definition.name,
+                exc.__class__.__name__,
+            )
+            raise
+        self.logger.info(
+            "lucid.runtime.load complete duration_ms=%.1f model=%s",
+            (perf_counter() - start) * 1000.0,
+            self.definition.name,
+        )
 
     def manifest(self) -> dict[str, Any]:
         return self.definition.to_manifest()

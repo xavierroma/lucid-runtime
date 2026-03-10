@@ -280,17 +280,24 @@ mod tests {
         serde_json::from_slice(&body).expect("response body should be JSON")
     }
 
-    async fn create_session(app: &Router, config: &Config) -> (StatusCode, SessionResponse) {
+    async fn create_session(
+        app: &Router,
+        config: &Config,
+        model_name: Option<&str>,
+    ) -> (StatusCode, SessionResponse) {
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/sessions")
+            .header(AUTHORIZATION, format!("Bearer {}", config.api_key));
+        let body = if let Some(model_name) = model_name {
+            request = request.header(CONTENT_TYPE, "application/json");
+            Body::from(json!({ "model_name": model_name }).to_string())
+        } else {
+            Body::empty()
+        };
         let response = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri("/sessions")
-                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
-                    .body(Body::empty())
-                    .expect("request should build"),
-            )
+            .oneshot(request.body(body).expect("request should build"))
             .await
             .expect("request should succeed");
 
@@ -327,7 +334,7 @@ mod tests {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1", "call-2"]));
         let (app, config) = test_app(fake_dispatch.clone());
 
-        let (status, payload) = create_session(&app, &config).await;
+        let (status, payload) = create_session(&app, &config, None).await;
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(payload.session.state, SessionState::Starting);
         assert!(payload.client_access_token.is_some());
@@ -335,6 +342,10 @@ mod tests {
             .session
             .room_name
             .starts_with(&format!("wm-{}", payload.session.session_id)));
+        assert_eq!(
+            payload.capabilities.manifest["model"]["name"],
+            Value::String(config.model_name.clone())
+        );
         assert_eq!(fake_dispatch.launched_count(), 1);
 
         let second = app
@@ -377,10 +388,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_session_rejects_mismatched_requested_model() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, config) = test_app(fake_dispatch.clone());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/sessions")
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "model_name": "waypoint" }).to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(fake_dispatch.launched_count(), 0);
+    }
+
+    #[tokio::test]
     async fn get_session_returns_found_and_not_found() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
         let (app, config) = test_app(fake_dispatch);
-        let (_, created) = create_session(&app, &config).await;
+        let (_, created) = create_session(&app, &config, None).await;
 
         let found = app
             .clone()
@@ -415,7 +449,7 @@ mod tests {
     async fn end_session_is_idempotent_and_best_effort_cancels_modal_job() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
         let (app, config) = test_app(fake_dispatch.clone());
-        let (_, created) = create_session(&app, &config).await;
+        let (_, created) = create_session(&app, &config, None).await;
 
         let first_end = app
             .clone()
@@ -468,7 +502,7 @@ mod tests {
     async fn internal_callbacks_transition_to_running_and_ended() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
         let (app, config) = test_app(fake_dispatch);
-        let (_, created) = create_session(&app, &config).await;
+        let (_, created) = create_session(&app, &config, None).await;
 
         let running = app
             .clone()

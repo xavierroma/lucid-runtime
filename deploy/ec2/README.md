@@ -66,9 +66,14 @@ Copy [coordinator.env.example](/Users/xavierroma/projects/lucid-runtime/deploy/e
 - `WORKER_INTERNAL_TOKEN`: bearer token used by Modal session callbacks to hit `/internal/...`
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
+- `WM_MODEL_NAME`: `yume` or `waypoint`; this must match the Modal worker you deployed
 - `MODAL_DISPATCH_BASE_URL`: Modal `dispatch_api` base URL
 - `MODAL_DISPATCH_TOKEN`: same token configured for the Modal app
 - `COORDINATOR_CALLBACK_BASE_URL`: public URL Modal can call back to
+
+For Waypoint, also raise `SESSION_STARTUP_TIMEOUT_SECS` well above the coordinator default.
+`900` seconds is a practical starting point for first cold boots because the worker may spend
+several minutes loading weights and autotuning kernels.
 
 For a raw EC2 public endpoint on port `8080`, use:
 
@@ -107,20 +112,29 @@ curl http://<ec2-public-dns>:8080/healthz
 
 If that works, the coordinator is reachable for:
 
-- `POST /v1/sessions`
-- `GET /v1/sessions/{session_id}`
-- `POST /v1/sessions/{session_id}:end`
-- Modal callbacks to `/internal/v1/sessions/{session_id}/running`
-- Modal callbacks to `/internal/v1/sessions/{session_id}/ended`
+- `POST /sessions`
+- `GET /sessions/{session_id}`
+- `POST /sessions/{session_id}:end`
+- Modal callbacks to `/internal/sessions/{session_id}/running`
+- Modal callbacks to `/internal/sessions/{session_id}/ended`
 
 ## 8) Minimal client smoke test
 
 ```bash
-curl -X POST http://<ec2-public-dns>:8080/v1/sessions \
+curl -X POST http://<ec2-public-dns>:8080/sessions \
   -H "Authorization: Bearer <API_KEY>"
 ```
 
 Expected: `202 Accepted` with a session id and client access token.
+
+## Demo app cross-check
+
+If you point the demo app at this coordinator, line these up:
+
+- coordinator `API_KEY` == demo `COORDINATOR_API_KEY` for local proxy mode or `VITE_COORDINATOR_API_KEY` for direct mode
+- coordinator `WM_MODEL_NAME` == demo `VITE_DEFAULT_MODEL`
+- coordinator `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` must belong to the same LiveKit project as the demo `VITE_LIVEKIT_URL`
+- coordinator `MODAL_DISPATCH_TOKEN` == Modal worker `MODAL_DISPATCH_TOKEN`
 
 ## Notes
 

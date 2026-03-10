@@ -45,12 +45,23 @@ Required environment variables:
 
 Optional environment variables:
 
+- `WM_MODEL_NAME` (default: `yume`; should match the deployed Modal worker model)
 - `COORDINATOR_BIND_ADDR` (default: `0.0.0.0:8080`)
 - `WORKER_ID` (default: `wm-worker-1`)
 - `SESSION_STARTUP_TIMEOUT_SECS` (default: `120`)
 - `SESSION_MAX_DURATION_SECS` (default: `3600`)
 - `SESSION_CANCEL_GRACE_SECS` (default: `30`)
 - `WORKER_HEARTBEAT_TIMEOUT_SECS` (default: `15`)
+
+`POST /sessions` also accepts an optional JSON body:
+
+```json
+{ "model_name": "waypoint" }
+```
+
+If `model_name` is provided, it must match `WM_MODEL_NAME`. The coordinator is still a
+single-model deployment, so this is a guardrail for clients such as the demo app rather than
+multi-model routing.
 
 ## Local run
 
