@@ -1,8 +1,7 @@
 # Contracts
 
-Shared API contracts and schemas used by all apps.
+Shared API contracts and generated Lucid artifacts used by all apps.
 
-- `openapi/session-api.yaml`: V1 coordinator API contract draft.
-- `openapi/worker-internal-api.yaml`: V1 coordinator internal session callback API contract draft.
-- `schemas/wm-control-v1.schema.json`: LiveKit control data message schema.
-- `schemas/wm-status-v1.schema.json`: LiveKit status data message schema.
+- `generated/lucid_manifest.json`: canonical generated Lucid model manifest embedded by the coordinator.
+- `openapi/session-api.yaml`: coordinator API contract draft.
+- `openapi/worker-internal-api.yaml`: coordinator internal session callback API contract draft.

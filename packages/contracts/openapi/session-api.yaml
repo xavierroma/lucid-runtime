@@ -11,7 +11,7 @@ paths:
       responses:
         '200':
           description: Healthy
-  /v1/sessions:
+  /sessions:
     post:
       summary: Create a session (async dispatch)
       security:
@@ -22,10 +22,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CreateSessionResponse'
+                $ref: '#/components/schemas/SessionResponse'
         '409':
           description: Active session in progress
-  /v1/sessions/{session_id}:
+  /sessions/{session_id}:
     get:
       summary: Get session state
       security:
@@ -43,10 +43,10 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Session'
+                $ref: '#/components/schemas/SessionResponse'
         '404':
           description: Not found
-  /v1/sessions/{session_id}:end:
+  /sessions/{session_id}:end:
     post:
       summary: End a session (idempotent)
       security:
@@ -92,12 +92,49 @@ components:
         end_reason:
           type: string
           nullable: true
-    CreateSessionResponse:
+    OutputBinding:
+      type: object
+      required:
+        - name
+        - kind
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        track_name:
+          type: string
+          nullable: true
+        topic:
+          type: string
+          nullable: true
+    Capabilities:
+      type: object
+      required:
+        - control_topic
+        - status_topic
+        - manifest
+        - output_bindings
+      properties:
+        control_topic:
+          type: string
+        status_topic:
+          type: string
+        manifest:
+          type: object
+        output_bindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/OutputBinding'
+    SessionResponse:
       type: object
       required:
         - session
+        - capabilities
       properties:
         session:
           $ref: '#/components/schemas/Session'
         client_access_token:
           type: string
+        capabilities:
+          $ref: '#/components/schemas/Capabilities'

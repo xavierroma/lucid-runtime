@@ -1,140 +1,345 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
 @import "@fontsource-variable/figtree";
 
-@custom-variant dark (&:is(.dark *));
-
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.147 0.004 49.25);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.147 0.004 49.25);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.147 0.004 49.25);
-    --primary: oklch(0.67 0.16 58);
-    --primary-foreground: oklch(0.99 0.02 95);
-    --secondary: oklch(0.967 0.001 286.375);
-    --secondary-foreground: oklch(0.21 0.006 285.885);
-    --muted: oklch(0.97 0.001 106.424);
-    --muted-foreground: oklch(0.553 0.013 58.071);
-    --accent: oklch(0.97 0.001 106.424);
-    --accent-foreground: oklch(0.216 0.006 56.043);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.923 0.003 48.717);
-    --input: oklch(0.923 0.003 48.717);
-    --ring: oklch(0.709 0.01 56.259);
-    --chart-1: oklch(0.88 0.15 92);
-    --chart-2: oklch(0.77 0.16 70);
-    --chart-3: oklch(0.67 0.16 58);
-    --chart-4: oklch(0.56 0.15 49);
-    --chart-5: oklch(0.47 0.12 46);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0.001 106.423);
-    --sidebar-foreground: oklch(0.147 0.004 49.25);
-    --sidebar-primary: oklch(0.67 0.16 58);
-    --sidebar-primary-foreground: oklch(0.99 0.02 95);
-    --sidebar-accent: oklch(0.97 0.001 106.424);
-    --sidebar-accent-foreground: oklch(0.216 0.006 56.043);
-    --sidebar-border: oklch(0.923 0.003 48.717);
-    --sidebar-ring: oklch(0.709 0.01 56.259);
-}
-
-.dark {
-    --background: oklch(0.147 0.004 49.25);
-    --foreground: oklch(0.985 0.001 106.423);
-    --card: oklch(0.216 0.006 56.043);
-    --card-foreground: oklch(0.985 0.001 106.423);
-    --popover: oklch(0.216 0.006 56.043);
-    --popover-foreground: oklch(0.985 0.001 106.423);
-    --primary: oklch(0.77 0.16 70);
-    --primary-foreground: oklch(0.28 0.07 46);
-    --secondary: oklch(0.274 0.006 286.033);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.268 0.007 34.298);
-    --muted-foreground: oklch(0.709 0.01 56.259);
-    --accent: oklch(0.268 0.007 34.298);
-    --accent-foreground: oklch(0.985 0.001 106.423);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.553 0.013 58.071);
-    --chart-1: oklch(0.88 0.15 92);
-    --chart-2: oklch(0.77 0.16 70);
-    --chart-3: oklch(0.67 0.16 58);
-    --chart-4: oklch(0.56 0.15 49);
-    --chart-5: oklch(0.47 0.12 46);
-    --sidebar: oklch(0.216 0.006 56.043);
-    --sidebar-foreground: oklch(0.985 0.001 106.423);
-    --sidebar-primary: oklch(0.77 0.16 70);
-    --sidebar-primary-foreground: oklch(0.28 0.07 46);
-    --sidebar-accent: oklch(0.268 0.007 34.298);
-    --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.553 0.013 58.071);
+  color-scheme: light;
+  --console-cream: #f6f0e2;
+  --console-shell: #efe4cf;
+  --console-shadow: #cbbd9d;
+  --console-screen: #111313;
+  --console-screen-glow: #8ff4c8;
+  --console-screen-copy: #d8ffe6;
+  --console-red: #ef5d4f;
+  --console-red-dark: #b62f28;
+  --console-teal: #2db9b3;
+  --console-teal-dark: #157c78;
+  --console-ink: #1f2530;
+  --console-muted: #6c665c;
+  --console-live: #58e08e;
+  --console-warm: #ffcf5b;
+  --console-fault: #ff7c6b;
 }
 
 @theme inline {
-    --font-sans: 'Figtree Variable', sans-serif;
-    --color-sidebar-ring: var(--sidebar-ring);
-    --color-sidebar-border: var(--sidebar-border);
-    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-    --color-sidebar-accent: var(--sidebar-accent);
-    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-    --color-sidebar-primary: var(--sidebar-primary);
-    --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
-    --color-chart-5: var(--chart-5);
-    --color-chart-4: var(--chart-4);
-    --color-chart-3: var(--chart-3);
-    --color-chart-2: var(--chart-2);
-    --color-chart-1: var(--chart-1);
-    --color-ring: var(--ring);
-    --color-input: var(--input);
-    --color-border: var(--border);
-    --color-destructive: var(--destructive);
-    --color-accent-foreground: var(--accent-foreground);
-    --color-accent: var(--accent);
-    --color-muted-foreground: var(--muted-foreground);
-    --color-muted: var(--muted);
-    --color-secondary-foreground: var(--secondary-foreground);
-    --color-secondary: var(--secondary);
-    --color-primary-foreground: var(--primary-foreground);
-    --color-primary: var(--primary);
-    --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
-    --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
-    --color-foreground: var(--foreground);
-    --color-background: var(--background);
-    --radius-sm: calc(var(--radius) - 4px);
-    --radius-md: calc(var(--radius) - 2px);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) + 4px);
-    --radius-2xl: calc(var(--radius) + 8px);
-    --radius-3xl: calc(var(--radius) + 12px);
-    --radius-4xl: calc(var(--radius) + 16px);
+  --font-sans: "Figtree Variable", sans-serif;
 }
 
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--console-ink);
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.7), transparent 36%),
+    linear-gradient(180deg, #efe6d8 0%, #ddd1bd 100%);
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.console-stage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem 1rem;
+}
+
+.console-shell {
+  position: relative;
+  width: min(1080px, 100%);
+  padding: clamp(1rem, 2vw, 1.5rem);
+}
+
+.console-joycon {
+  position: absolute;
+  top: 12%;
+  bottom: 12%;
+  width: clamp(1.6rem, 4vw, 3.2rem);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.25);
+}
+
+.console-joycon-left {
+  left: 0;
+  background: linear-gradient(180deg, var(--console-red), var(--console-red-dark));
+}
+
+.console-joycon-right {
+  right: 0;
+  background: linear-gradient(180deg, var(--console-teal), var(--console-teal-dark));
+}
+
+.console-body {
+  position: relative;
+  z-index: 1;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0)),
+    var(--console-shell);
+  border: 3px solid rgba(61, 48, 25, 0.1);
+  border-radius: 2.75rem;
+  padding: clamp(1.15rem, 2vw, 1.75rem);
+  box-shadow:
+    0 30px 70px rgba(73, 55, 27, 0.18),
+    inset 0 -8px 18px rgba(118, 90, 43, 0.12);
+}
+
+.console-screen-frame {
+  position: relative;
+  padding: clamp(0.7rem, 1.4vw, 1rem);
+  border-radius: 2rem;
+  background: linear-gradient(180deg, #3f454e, #20242b);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -10px 20px rgba(0, 0, 0, 0.25);
+}
+
+.console-screen {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  background:
+    radial-gradient(circle at 50% 12%, rgba(143, 244, 200, 0.08), transparent 30%),
+    linear-gradient(180deg, #151818, #090a0a);
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.03),
+    inset 0 0 60px rgba(0, 0, 0, 0.45);
+}
+
+.console-video {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+
+.screen-badge {
+  position: absolute;
+  top: clamp(1rem, 2vw, 1.25rem);
+  left: clamp(1rem, 2vw, 1.25rem);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.48rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.screen-badge-dot {
+  width: 0.58rem;
+  height: 0.58rem;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 14px currentColor;
+}
+
+.screen-badge-live {
+  color: #04170b;
+  background: rgba(88, 224, 142, 0.92);
+}
+
+.screen-badge-warm {
+  color: #2d2100;
+  background: rgba(255, 207, 91, 0.92);
+}
+
+.screen-badge-fault {
+  color: #280605;
+  background: rgba(255, 124, 107, 0.94);
+}
+
+.screen-badge-off {
+  color: #d7dbdd;
+  background: rgba(46, 51, 56, 0.88);
+}
+
+.screen-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 4rem 1.5rem 1.5rem;
+  text-align: center;
+}
+
+.screen-fallback-kicker {
+  margin: 0 0 0.6rem;
+  color: var(--console-screen-glow);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.screen-fallback-copy {
+  margin: 0;
+  max-width: 28rem;
+  color: var(--console-screen-copy);
+  font-size: clamp(0.95rem, 1.9vw, 1.15rem);
+  line-height: 1.55;
+}
+
+.console-controls {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: clamp(1rem, 2vw, 1.5rem);
+  align-items: end;
+  margin-top: clamp(1rem, 2vw, 1.5rem);
+}
+
+.power-button {
+  display: inline-grid;
+  place-items: center;
+  width: clamp(4rem, 9vw, 5.3rem);
+  height: clamp(4rem, 9vw, 5.3rem);
+  border: 0;
+  border-radius: 1.4rem;
+  color: white;
+  background: linear-gradient(180deg, var(--console-red), var(--console-red-dark));
+  box-shadow:
+    0 18px 25px rgba(182, 47, 40, 0.28),
+    inset 0 2px 0 rgba(255, 255, 255, 0.22);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    filter 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.power-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: saturate(1.08);
+}
+
+.power-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.power-button:disabled {
+  cursor: progress;
+  opacity: 0.8;
+}
+
+.power-button-on {
+  background: linear-gradient(180deg, var(--console-teal), var(--console-teal-dark));
+  box-shadow:
+    0 18px 25px rgba(21, 124, 120, 0.26),
+    inset 0 2px 0 rgba(255, 255, 255, 0.22);
+}
+
+.power-icon {
+  width: 1.45rem;
+  height: 1.45rem;
+}
+
+.prompt-panel {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.85rem;
+  align-items: stretch;
+}
+
+.prompt-textarea {
+  min-height: 8rem;
+  width: 100%;
+  resize: none;
+  border: 2px solid rgba(58, 49, 32, 0.14);
+  border-radius: 1.6rem;
+  padding: 1rem 1.1rem;
+  color: var(--console-ink);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.5)),
+    var(--console-cream);
+  box-shadow: inset 0 2px 10px rgba(125, 105, 70, 0.08);
+}
+
+.prompt-textarea:focus {
+  outline: 3px solid rgba(239, 93, 79, 0.18);
+  border-color: rgba(239, 93, 79, 0.36);
+}
+
+.prompt-textarea::placeholder {
+  color: var(--console-muted);
+}
+
+.prompt-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  min-width: 7.4rem;
+  border: 0;
+  border-radius: 1.45rem;
+  padding: 0 1.25rem;
+  color: white;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: linear-gradient(180deg, #262d37, #14181e);
+  box-shadow:
+    0 16px 24px rgba(17, 19, 19, 0.18),
+    inset 0 2px 0 rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    filter 120ms ease;
+}
+
+.prompt-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+
+.prompt-send:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+@media (max-width: 880px) {
+  .console-shell {
+    padding-inline: 0.5rem;
   }
 
-  html {
-    @apply font-sans;
+  .console-joycon {
+    display: none;
   }
 
-  body {
-    @apply min-h-screen font-sans bg-background text-foreground;
-    background-image:
-      radial-gradient(circle at top left, color-mix(in oklab, var(--color-primary) 18%, transparent), transparent 32%),
-      radial-gradient(circle at top right, color-mix(in oklab, var(--color-chart-2) 14%, transparent), transparent 28%),
-      linear-gradient(180deg, color-mix(in oklab, var(--color-background) 96%, var(--color-card) 4%), var(--color-background));
-    background-attachment: fixed;
+  .console-body {
+    border-radius: 2rem;
   }
 
-  code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  .console-controls {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .power-button {
+    width: 100%;
+    height: 3.6rem;
+  }
+
+  .prompt-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .prompt-send {
+    min-height: 3.6rem;
   }
 }

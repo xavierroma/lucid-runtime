@@ -26,7 +26,6 @@ pub struct LaunchSessionRequest {
     pub room_name: String,
     pub worker_id: String,
     pub worker_access_token: String,
-    pub video_track_name: String,
     pub control_topic: String,
     pub coordinator_base_url: String,
     pub coordinator_internal_token: String,

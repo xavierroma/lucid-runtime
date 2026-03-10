@@ -8,9 +8,10 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
+    capabilities,
     auth, livekit_tokens,
     modal_dispatch::LaunchSessionRequest,
-    models::{CreateSessionResponse, ErrorResponse, CONTROL_TOPIC, VIDEO_TRACK_NAME},
+    models::{ErrorResponse, SessionResponse, CONTROL_TOPIC},
     state::EndRequestError,
     AppContext,
 };
@@ -73,7 +74,6 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
             room_name: room_name.clone(),
             worker_id: ctx.config.worker_id.clone(),
             worker_access_token: worker_access_token.clone(),
-            video_track_name: VIDEO_TRACK_NAME.to_string(),
             control_topic: CONTROL_TOPIC.to_string(),
             coordinator_base_url: ctx.config.callback_base_url.clone(),
             coordinator_internal_token: ctx.config.worker_internal_token.clone(),
@@ -118,12 +118,14 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
     }
 
     let session = session.expect("session should exist when no post-launch conflict");
+    let capabilities = capabilities::build_capabilities();
 
     (
         StatusCode::ACCEPTED,
-        Json(CreateSessionResponse {
+        Json(SessionResponse {
             session,
             client_access_token: Some(client_access_token),
+            capabilities,
         }),
     )
         .into_response()
@@ -149,7 +151,15 @@ pub async fn get_session(
         return error_response(StatusCode::NOT_FOUND, "session not found");
     };
 
-    (StatusCode::OK, Json(session)).into_response()
+    (
+        StatusCode::OK,
+        Json(SessionResponse {
+            session,
+            client_access_token: None,
+            capabilities: capabilities::build_capabilities(),
+        }),
+    )
+        .into_response()
 }
 
 pub async fn end_session(

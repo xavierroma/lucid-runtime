@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 DEFAULT_ENV_FILE="${SCRIPT_DIR}/.env"
-MODAL_APP_ENTRYPOINT="apps/worker/src/wm_worker/modal_app.py"
+MODAL_APP_ENTRYPOINT="examples/yume_modal/src/yume_modal_example/modal_app.py"
 DEFAULT_MODAL_APP_NAME="lucid-runtime-worker"
 MODAL_SCRIPT_ARGS=()
 
@@ -80,7 +80,7 @@ require_env_vars() {
 }
 
 validate_runtime_env() {
-  require_env_vars MODAL_DISPATCH_TOKEN LIVEKIT_URL WM_ENGINE WM_LIVEKIT_MODE
+  require_env_vars MODAL_DISPATCH_TOKEN LIVEKIT_URL WM_ENGINE WM_LIVEKIT_MODE WM_MODEL_MODULE
 
   if [[ "${WM_ENGINE}" == "yume" ]]; then
     require_env_vars YUME_MODEL_DIR
@@ -91,6 +91,7 @@ run_modal() {
   require_command uv
   (
     cd "${REPO_ROOT}"
-    uv run --project apps/worker modal "$@"
+    export PYTHONPATH="${REPO_ROOT}/examples/yume_modal/src:${PYTHONPATH:-}"
+    uv run --project examples/yume_modal modal "$@"
   )
 }

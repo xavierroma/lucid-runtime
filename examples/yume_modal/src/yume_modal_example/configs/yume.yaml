@@ -1,0 +1,10 @@
+model:
+  name: yume
+  description: Yume first-person world model
+prompt:
+  default: "POV of a character walking in a minecraft scene"
+outputs:
+  main_video:
+    width: 1280
+    height: 720
+    fps: 2

@@ -9,9 +9,6 @@ export const demoEnv = {
   coordinatorApiKey: trim(import.meta.env.VITE_COORDINATOR_API_KEY),
   coordinatorBaseUrl: explicitCoordinatorBaseUrl || devProxyBaseUrl,
   livekitUrl: trim(import.meta.env.VITE_LIVEKIT_URL),
-  controlTopic: trim(import.meta.env.VITE_CONTROL_TOPIC) || "wm.control.v1",
-  statusTopic: trim(import.meta.env.VITE_STATUS_TOPIC) || "wm.status.v1",
-  videoTrackName: trim(import.meta.env.VITE_VIDEO_TRACK_NAME) || "main_video",
 }
 
 export function getMissingConfig(): string[] {
