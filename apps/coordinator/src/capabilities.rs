@@ -4,24 +4,50 @@ use serde_json::Value;
 
 use crate::models::{Capabilities, OutputBinding, CONTROL_TOPIC, STATUS_TOPIC};
 
-static MANIFEST: OnceLock<Value> = OnceLock::new();
+static YUME_MANIFEST: OnceLock<Value> = OnceLock::new();
+static WAYPOINT_MANIFEST: OnceLock<Value> = OnceLock::new();
 
-pub fn manifest() -> Value {
-    MANIFEST
-        .get_or_init(|| {
-            serde_json::from_str(include_str!(
-                concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../packages/contracts/generated/lucid_manifest.json"
-                )
-            ))
-            .expect("embedded lucid manifest should be valid JSON")
-        })
-        .clone()
+fn parse_manifest(path: &str) -> Value {
+    serde_json::from_str(path).expect("embedded lucid manifest should be valid JSON")
 }
 
-pub fn build_capabilities() -> Capabilities {
-    let manifest = manifest();
+pub fn manifest(model_name: &str) -> Value {
+    match model_name {
+        "waypoint" => WAYPOINT_MANIFEST
+            .get_or_init(|| {
+                parse_manifest(include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../packages/contracts/generated/lucid_manifest.waypoint.json"
+                )))
+            })
+            .clone(),
+        "yume" => YUME_MANIFEST
+            .get_or_init(|| {
+                parse_manifest(include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../packages/contracts/generated/lucid_manifest.json"
+                )))
+            })
+            .clone(),
+        other => {
+            tracing::warn!(
+                model_name = other,
+                "unknown coordinator model; falling back to yume"
+            );
+            YUME_MANIFEST
+                .get_or_init(|| {
+                    parse_manifest(include_str!(concat!(
+                        env!("CARGO_MANIFEST_DIR"),
+                        "/../../packages/contracts/generated/lucid_manifest.json"
+                    )))
+                })
+                .clone()
+        }
+    }
+}
+
+pub fn build_capabilities(model_name: &str) -> Capabilities {
+    let manifest = manifest(model_name);
     let output_bindings = manifest
         .get("outputs")
         .and_then(Value::as_array)

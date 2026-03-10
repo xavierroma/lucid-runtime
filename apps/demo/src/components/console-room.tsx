@@ -13,7 +13,7 @@ import type { TrackReference } from "@livekit/components-react"
 
 import { demoEnv } from "@/lib/env"
 import type { Capabilities, SessionRecord } from "@/lib/coordinator"
-import { encodeActionMessage } from "@/lib/generated/lucid"
+import type { WaypointControlState } from "@/components/waypoint-controls"
 
 export interface QueuedPrompt {
   nonce: number
@@ -25,12 +25,45 @@ interface ConsoleRoomProps {
   token: string | null
   capabilities: Capabilities | null
   queuedPrompt: QueuedPrompt | null
+  controlState: WaypointControlState
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
   onPromptSent: () => void
-  onPromptError: (message: string | null) => void
+  onActionError: (message: string | null) => void
   onRoomError: (message: string | null) => void
+}
+
+interface ActionEnvelope {
+  type: "action"
+  seq: number
+  ts_ms: number
+  session_id: string | null
+  payload: {
+    name: string
+    args: Record<string, unknown>
+  }
+}
+
+const encoder = new TextEncoder()
+
+function encodeActionMessage(args: {
+  name: string
+  args: Record<string, unknown>
+  seq: number
+  sessionId: string
+}) {
+  const envelope: ActionEnvelope = {
+    type: "action",
+    seq: args.seq,
+    ts_ms: Date.now(),
+    session_id: args.sessionId,
+    payload: {
+      name: args.name,
+      args: args.args,
+    },
+  }
+  return encoder.encode(JSON.stringify(envelope))
 }
 
 export function ConsoleRoom({
@@ -38,11 +71,12 @@ export function ConsoleRoom({
   token,
   capabilities,
   queuedPrompt,
+  controlState,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
   onPromptSent,
-  onPromptError,
+  onActionError,
   onRoomError,
 }: ConsoleRoomProps) {
   useEffect(() => {
@@ -81,11 +115,12 @@ export function ConsoleRoom({
         session={session}
         capabilities={capabilities}
         queuedPrompt={queuedPrompt}
+        controlState={controlState}
         fallback={fallback}
         onConnectionChange={onConnectionChange}
         onTrackReadyChange={onTrackReadyChange}
         onPromptSent={onPromptSent}
-        onPromptError={onPromptError}
+        onActionError={onActionError}
       />
     </LiveKitRoom>
   )
@@ -95,22 +130,24 @@ interface ConsoleRoomContentProps {
   session: SessionRecord
   capabilities: Capabilities
   queuedPrompt: QueuedPrompt | null
+  controlState: WaypointControlState
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
   onPromptSent: () => void
-  onPromptError: (message: string | null) => void
+  onActionError: (message: string | null) => void
 }
 
 function ConsoleRoomContent({
   session,
   capabilities,
   queuedPrompt,
+  controlState,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
   onPromptSent,
-  onPromptError,
+  onActionError,
 }: ConsoleRoomContentProps) {
   const room = useRoomContext()
   const connectionState = useConnectionState(room)
@@ -118,10 +155,15 @@ function ConsoleRoomContent({
   const { send } = useDataChannel(capabilities.control_topic)
   const actionSeqRef = useRef(0)
   const lastPromptNonceRef = useRef<number | null>(null)
+  const lastControlSignatureRef = useRef<string | null>(null)
 
   const videoBinding = useMemo(
     () => capabilities.output_bindings.find((binding) => binding.kind === "video"),
     [capabilities.output_bindings],
+  )
+  const supportsControlState = useMemo(
+    () => capabilities.manifest.actions.some((action) => action.name === "set_controls"),
+    [capabilities.manifest.actions],
   )
 
   const remoteTrack = useMemo(() => {
@@ -149,6 +191,12 @@ function ConsoleRoomContent({
   }, [onTrackReadyChange, remoteTrack])
 
   useEffect(() => {
+    actionSeqRef.current = 0
+    lastPromptNonceRef.current = null
+    lastControlSignatureRef.current = null
+  }, [session.session_id])
+
+  useEffect(() => {
     if (!queuedPrompt) {
       return
     }
@@ -163,7 +211,7 @@ function ConsoleRoomContent({
 
     const publishPrompt = async () => {
       try {
-        onPromptError(null)
+        onActionError(null)
         await send(
           encodeActionMessage({
             name: "set_prompt",
@@ -179,7 +227,7 @@ function ConsoleRoomContent({
         }
       } catch (error) {
         if (!cancelled) {
-          onPromptError(
+          onActionError(
             error instanceof Error ? error.message : "failed to publish prompt",
           )
         }
@@ -193,11 +241,77 @@ function ConsoleRoomContent({
     }
   }, [
     connectionState,
-    onPromptError,
+    onActionError,
     onPromptSent,
     queuedPrompt,
     send,
     session.session_id,
+  ])
+
+  useEffect(() => {
+    if (!supportsControlState) {
+      return
+    }
+    if (connectionState !== ConnectionState.Connected) {
+      return
+    }
+
+    const signature = JSON.stringify(controlState)
+    if (lastControlSignatureRef.current === signature) {
+      return
+    }
+
+    let cancelled = false
+
+    const publishControls = async () => {
+      try {
+        onActionError(null)
+        await send(
+          encodeActionMessage({
+            name: "set_controls",
+            args: {
+              forward: controlState.forward,
+              backward: controlState.backward,
+              left: controlState.left,
+              right: controlState.right,
+              jump: controlState.jump,
+              sprint: controlState.sprint,
+              crouch: controlState.crouch,
+              primary_fire: controlState.primary_fire,
+              secondary_fire: controlState.secondary_fire,
+              mouse_x: controlState.mouse_x,
+              mouse_y: controlState.mouse_y,
+              scroll_wheel: controlState.scroll_wheel,
+            },
+            seq: actionSeqRef.current++,
+            sessionId: session.session_id,
+          }),
+          { reliable: true },
+        )
+        if (!cancelled) {
+          lastControlSignatureRef.current = signature
+        }
+      } catch (error) {
+        if (!cancelled) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish controls",
+          )
+        }
+      }
+    }
+
+    void publishControls()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionState,
+    controlState,
+    onActionError,
+    send,
+    session.session_id,
+    supportsControlState,
   ])
 
   if (!remoteTrack) {

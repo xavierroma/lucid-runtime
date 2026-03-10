@@ -6,6 +6,7 @@ ENV CARGO_TARGET_DIR=/workspace/target
 COPY Cargo.lock apps/coordinator/Cargo.lock
 COPY apps/coordinator/Cargo.toml apps/coordinator/Cargo.toml
 COPY apps/coordinator/src apps/coordinator/src
+COPY packages/contracts/generated packages/contracts/generated
 
 RUN cargo build --locked --manifest-path apps/coordinator/Cargo.toml --release
 

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Callable
+from time import perf_counter
 from typing import Any
 
 from .config import RuntimeConfig, SessionConfig
@@ -67,8 +68,23 @@ class SessionRunner:
     async def load(self) -> None:
         if self._loaded:
             return
-        await self._runtime.load()
+        start = perf_counter()
+        try:
+            await self._runtime.load()
+        except Exception as exc:
+            self._logger.error(
+                "session_runner.load failed duration_ms=%.1f model=%s error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                self._runtime.definition.name,
+                exc.__class__.__name__,
+            )
+            raise
         self._loaded = True
+        self._logger.info(
+            "session_runner.load complete duration_ms=%.1f model=%s",
+            (perf_counter() - start) * 1000.0,
+            self._runtime.definition.name,
+        )
 
     async def close(self) -> None:
         if self._coordinator is not None:
@@ -114,14 +130,30 @@ class SessionRunner:
             assignment.room_name,
             self._runtime.definition.name,
         )
+        start = perf_counter()
         try:
             await livekit.connect(assignment, self._runtime.outputs)
+            self._logger.info(
+                "session_runner.run_session livekit_connected elapsed_ms=%.1f session_id=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+            )
             if self._coordinator is not None:
                 await self._coordinator.mark_running(assignment.session_id)
+                self._logger.info(
+                    "session_runner.run_session coordinator_marked_running elapsed_ms=%.1f session_id=%s",
+                    (perf_counter() - start) * 1000.0,
+                    assignment.session_id,
+                )
             await status.started(
                 self._session_config.worker_id
                 if self._session_config is not None
                 else "lucid-research"
+            )
+            self._logger.info(
+                "session_runner.run_session status_published elapsed_ms=%.1f session_id=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
             )
 
             tasks = [
@@ -157,22 +189,58 @@ class SessionRunner:
                         name="heartbeat_loop",
                     )
                 )
+            self._logger.info(
+                "session_runner.run_session loops_started elapsed_ms=%.1f session_id=%s task_count=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+                len(tasks),
+            )
             await self._watch_session_tasks(tasks, result, session_ctx)
         except LucidError as exc:
             result.error_code = "MODEL_RUNTIME_ERROR"
+            self._logger.error(
+                "session_runner.run_session failed duration_ms=%.1f session_id=%s error_code=%s error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+                result.error_code,
+                exc.__class__.__name__,
+            )
             self._logger.exception("lucid runtime error: %s", exc)
         except Exception as exc:  # pragma: no cover - integration boundary
             if self._is_modal_input_cancellation(exc):
                 self._logger.info("session cancelled by modal input cancellation")
             else:
                 result.error_code = "LIVEKIT_DISCONNECT"
-                self._logger.exception("session failed: %s", exc)
+            self._logger.error(
+                "session_runner.run_session failed duration_ms=%.1f session_id=%s error_code=%s error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+                result.error_code,
+                exc.__class__.__name__,
+            )
+            self._logger.exception("session failed: %s", exc)
         finally:
             session_ctx.running = False
             self._active_session_ctx = None
             await self._runtime.model.end_session(session_ctx)
+            self._logger.info(
+                "session_runner.run_session model_session_ended elapsed_ms=%.1f session_id=%s error_code=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+                result.error_code,
+            )
             await self._emit_terminal_status(status, result, output_router, session_ctx)
+            self._logger.info(
+                "session_runner.run_session terminal_status_emitted elapsed_ms=%.1f session_id=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+            )
             await livekit.disconnect()
+            self._logger.info(
+                "session_runner.run_session livekit_disconnected elapsed_ms=%.1f session_id=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+            )
             if self._coordinator is not None:
                 try:
                     end_reason = None
@@ -191,6 +259,13 @@ class SessionRunner:
                 "session finished session_id=%s error_code=%s",
                 assignment.session_id,
                 result.error_code,
+            )
+            self._logger.info(
+                "session_runner.run_session complete duration_ms=%.1f session_id=%s error_code=%s ended_by_control=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+                result.error_code,
+                result.ended_by_control,
             )
 
         return result

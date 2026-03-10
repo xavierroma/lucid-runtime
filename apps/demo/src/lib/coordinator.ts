@@ -1,5 +1,4 @@
 import { demoEnv } from "@/lib/env"
-import { lucidManifest } from "@/lib/generated/lucid"
 
 export type SessionState =
   | "STARTING"
@@ -23,10 +22,35 @@ export interface OutputBinding {
   topic?: string | null
 }
 
+export interface ManifestAction {
+  name: string
+  description?: string | null
+  mode: string
+  args_schema: Record<string, unknown>
+}
+
+export interface ManifestOutput {
+  name: string
+  kind: string
+  width?: number
+  height?: number
+  fps?: number
+  pixel_format?: string
+}
+
+export interface LucidManifest {
+  model: {
+    name: string
+    description?: string | null
+  }
+  actions: ManifestAction[]
+  outputs: ManifestOutput[]
+}
+
 export interface Capabilities {
   control_topic: string
   status_topic: string
-  manifest: typeof lucidManifest
+  manifest: LucidManifest
   output_bindings: OutputBinding[]
 }
 
@@ -81,9 +105,15 @@ async function request<T>(path: string, init?: RequestInit) {
   return (await response.json()) as T
 }
 
-export async function createSession() {
+export async function createSession(modelName?: string) {
   return request<SessionResponse>("/sessions", {
     method: "POST",
+    headers: modelName
+      ? {
+          "Content-Type": "application/json",
+        }
+      : undefined,
+    body: modelName ? JSON.stringify({ model_name: modelName }) : undefined,
   })
 }
 

@@ -4,6 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
+from time import perf_counter
 from typing import Any, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -254,15 +255,52 @@ def create_app(
         @modal.enter()
         async def load(self) -> None:
             self._logger = _build_logger()
-            self._host_config = runtime_config_loader()
-            ensure_model_module_loaded()
-            self._runtime_config = build_model_runtime_config(self._host_config)
-            self._runtime = LucidRuntime.load_selected(
-                runtime_config=self._runtime_config,
-                logger=self._logger,
-                model_name=os.getenv("WM_MODEL_NAME", "").strip() or None,
+            start = perf_counter()
+            try:
+                self._host_config = runtime_config_loader()
+                self._logger.info(
+                    "modal.worker.load host_config_ready elapsed_ms=%.1f livekit_mode=%s app_name=%s gpu=%s startup_timeout_seconds=%s",
+                    (perf_counter() - start) * 1000.0,
+                    getattr(self._host_config, "livekit_mode", None),
+                    app_name,
+                    gpu,
+                    startup_timeout_seconds,
+                )
+                ensure_model_module_loaded()
+                self._logger.info(
+                    "modal.worker.load model_module_loaded elapsed_ms=%.1f",
+                    (perf_counter() - start) * 1000.0,
+                )
+                self._runtime_config = build_model_runtime_config(self._host_config)
+                self._logger.info(
+                    "modal.worker.load runtime_config_ready elapsed_ms=%.1f frame_width=%s frame_height=%s",
+                    (perf_counter() - start) * 1000.0,
+                    getattr(self._runtime_config, "frame_width", None),
+                    getattr(self._runtime_config, "frame_height", None),
+                )
+                self._runtime = LucidRuntime.load_selected(
+                    runtime_config=self._runtime_config,
+                    logger=self._logger,
+                    model_name=os.getenv("WM_MODEL_NAME", "").strip() or None,
+                )
+                self._logger.info(
+                    "modal.worker.load runtime_selected elapsed_ms=%.1f model=%s",
+                    (perf_counter() - start) * 1000.0,
+                    self._runtime.definition.name,
+                )
+                await self._runtime.load()
+            except Exception as exc:
+                self._logger.error(
+                    "modal.worker.load failed duration_ms=%.1f error_type=%s",
+                    (perf_counter() - start) * 1000.0,
+                    exc.__class__.__name__,
+                )
+                raise
+            self._logger.info(
+                "modal.worker.load complete duration_ms=%.1f model=%s",
+                (perf_counter() - start) * 1000.0,
+                self._runtime.definition.name,
             )
-            await self._runtime.load()
 
         @modal.method()
         async def run_session(self, payload: dict[str, Any]) -> None:

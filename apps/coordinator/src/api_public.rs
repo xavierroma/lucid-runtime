@@ -8,10 +8,9 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    capabilities,
-    auth, livekit_tokens,
+    auth, capabilities, livekit_tokens,
     modal_dispatch::LaunchSessionRequest,
-    models::{ErrorResponse, SessionResponse, CONTROL_TOPIC},
+    models::{CreateSessionRequest, ErrorResponse, SessionResponse, CONTROL_TOPIC},
     state::EndRequestError,
     AppContext,
 };
@@ -20,9 +19,29 @@ pub async fn healthz() -> StatusCode {
     StatusCode::OK
 }
 
-pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -> Response {
+pub async fn create_session(
+    State(ctx): State<AppContext>,
+    headers: HeaderMap,
+    payload: Option<Json<CreateSessionRequest>>,
+) -> Response {
     if !auth::is_bearer_authorized(&headers, &ctx.config.api_key) {
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    if let Some(requested_model) = payload
+        .and_then(|payload| payload.0.model_name)
+        .map(|model_name| model_name.trim().to_lowercase())
+        .filter(|model_name| !model_name.is_empty())
+    {
+        if requested_model != ctx.config.model_name {
+            return error_response(
+                StatusCode::CONFLICT,
+                &format!(
+                    "requested model {requested_model} does not match deployed coordinator model {}",
+                    ctx.config.model_name
+                ),
+            );
+        }
     }
 
     crate::reconcile_runtime(&ctx).await;
@@ -118,7 +137,7 @@ pub async fn create_session(State(ctx): State<AppContext>, headers: HeaderMap) -
     }
 
     let session = session.expect("session should exist when no post-launch conflict");
-    let capabilities = capabilities::build_capabilities();
+    let capabilities = capabilities::build_capabilities(&ctx.config.model_name);
 
     (
         StatusCode::ACCEPTED,
@@ -156,7 +175,7 @@ pub async fn get_session(
         Json(SessionResponse {
             session,
             client_access_token: None,
-            capabilities: capabilities::build_capabilities(),
+            capabilities: capabilities::build_capabilities(&ctx.config.model_name),
         }),
     )
         .into_response()
