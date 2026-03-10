@@ -44,15 +44,6 @@ pub async fn create_session(
         }
     }
 
-    crate::reconcile_runtime(&ctx).await;
-
-    {
-        let runtime = ctx.runtime.read().await;
-        if !runtime.can_create_session() {
-            return error_response(StatusCode::CONFLICT, "active session in progress");
-        }
-    }
-
     let session_id = Uuid::new_v4();
     let room_name = crate::state::RuntimeState::room_name_for(session_id);
 
@@ -109,34 +100,10 @@ pub async fn create_session(
         }
     };
 
-    let (session, post_launch_conflict) = {
+    let session = {
         let mut runtime = ctx.runtime.write().await;
-        if !runtime.can_create_session() {
-            (None, true)
-        } else {
-            (
-                Some(runtime.create_session(session_id, function_call_id.clone(), Instant::now())),
-                false,
-            )
-        }
+        runtime.create_session(session_id, function_call_id, Instant::now())
     };
-
-    if post_launch_conflict {
-        if let Err(err) = ctx
-            .modal_dispatch
-            .cancel_session(&function_call_id, false)
-            .await
-        {
-            tracing::warn!(
-                error = %err,
-                function_call_id = %function_call_id,
-                "failed to cancel modal call after coordinator conflict"
-            );
-        }
-        return error_response(StatusCode::CONFLICT, "active session in progress");
-    }
-
-    let session = session.expect("session should exist when no post-launch conflict");
     let capabilities = capabilities::build_capabilities(&ctx.config.model_name);
 
     (
@@ -158,8 +125,6 @@ pub async fn get_session(
     if !auth::is_bearer_authorized(&headers, &ctx.config.api_key) {
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-
-    crate::reconcile_runtime(&ctx).await;
 
     let Ok(session_id) = Uuid::parse_str(&session_id) else {
         return error_response(StatusCode::NOT_FOUND, "session not found");
@@ -189,8 +154,6 @@ pub async fn end_session(
     if !auth::is_bearer_authorized(&headers, &ctx.config.api_key) {
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
-
-    crate::reconcile_runtime(&ctx).await;
 
     let Some(session_id) = parse_end_session_id(&session_id_and_action) else {
         return error_response(StatusCode::NOT_FOUND, "session not found");

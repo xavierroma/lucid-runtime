@@ -24,7 +24,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
         '409':
-          description: Active session in progress
+          description: Requested model does not match the deployed coordinator model
   /sessions/{session_id}:
     get:
       summary: Get session state
@@ -85,7 +85,7 @@ components:
           type: string
         state:
           type: string
-          enum: [STARTING, RUNNING, CANCELING, ENDED, FAILED]
+          enum: [STARTING, READY, RUNNING, CANCELING, ENDED, FAILED]
         error_code:
           type: string
           nullable: true
