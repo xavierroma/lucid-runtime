@@ -2,6 +2,8 @@
 
 This path deploys the coordinator on a small EC2 instance and keeps GPU execution on Modal.
 
+After the instance has Docker installed, [`deploy/ec2/deploy.sh`](/Users/xavierroma/projects/lucid-runtime/deploy/ec2/deploy.sh) can build the coordinator image on your workstation, push it to your registry, copy the runtime files to EC2, and restart the remote container in one command.
+
 ## Target shape
 
 - EC2 instance type: `t3.micro`
@@ -17,8 +19,10 @@ Create an EC2 `t3.micro` instance running Amazon Linux 2023.
 
 Security group minimum:
 
-- inbound `22/tcp` from your IP
 - inbound `8080/tcp` from the IP ranges that must reach the coordinator
+
+If you plan to use the SSH transport explicitly, also allow inbound `22/tcp` from your IP.
+For the default SSM-first deploy flow, SSH ingress is not required.
 
 For a quick test, `8080/tcp` can be open publicly. For anything beyond a short-lived test, restrict that rule and front the instance with a proper HTTPS endpoint.
 
@@ -33,34 +37,18 @@ newgrp docker
 docker version
 ```
 
-## 3) Build and push the image from your workstation
+For the default SSM-first deploy flow, the instance should also be managed by AWS Systems Manager
+(SSM). Amazon Linux instances with an attached instance profile commonly already meet that bar.
 
-Build for Linux x86_64, then push to any registry the instance can pull from.
+## 3) Configure one env file on your workstation
 
-```bash
-docker buildx build \
-  --platform linux/amd64 \
-  -f apps/coordinator/Dockerfile \
-  -t <registry>/lucid-coordinator:<tag> \
-  --push \
-  .
-```
-
-Examples of `<registry>`:
-
-- `ghcr.io/<org-or-user>`
-- `<aws-account-id>.dkr.ecr.<region>.amazonaws.com`
-- `docker.io/<user-or-org>`
-
-## 4) Copy env template and fill it in
-
-On the instance:
+Copy [coordinator.env.example](/Users/xavierroma/projects/lucid-runtime/deploy/ec2/coordinator.env.example) to `deploy/ec2/coordinator.env`, then fill in:
 
 ```bash
-mkdir -p ~/lucid-runtime/deploy/ec2
+cp deploy/ec2/coordinator.env.example deploy/ec2/coordinator.env
 ```
 
-Copy [coordinator.env.example](/Users/xavierroma/projects/lucid-runtime/deploy/ec2/coordinator.env.example) to `~/lucid-runtime/deploy/ec2/coordinator.env`, then set:
+Coordinator runtime settings:
 
 - `API_KEY`: bearer token for your public session API clients
 - `WORKER_INTERNAL_TOKEN`: bearer token used by Modal session callbacks to hit `/internal/...`
@@ -81,22 +69,66 @@ For a raw EC2 public endpoint on port `8080`, use:
 COORDINATOR_CALLBACK_BASE_URL=http://<ec2-public-dns>:8080
 ```
 
-## 5) Pull and run the coordinator
+Deployment settings used by `deploy/ec2/deploy.sh`:
 
-Set the image reference, then start the container with the helper script.
+- `COORDINATOR_IMAGE_REPOSITORY`: registry repo to push to, such as:
+  - `ghcr.io/<org-or-user>/lucid-coordinator`
+  - `<aws-account-id>.dkr.ecr.<region>.amazonaws.com/lucid-coordinator`
+  - `docker.io/<user-or-org>/lucid-coordinator`
+- `COORDINATOR_IMAGE_TAG`: optional fixed tag; if unset the script uses the current git sha, adds `-dirty` when the worktree is not clean, or falls back to a timestamp outside git
+- `COORDINATOR_IMAGE`: optional full image ref if you do not want repository + tag composition
+- `EC2_HOST`: public DNS name or SSH host
+- `EC2_DEPLOY_TRANSPORT` (optional): `auto` (default), `ssm`, or `ssh`
+- `EC2_INSTANCE_ID` (optional): explicit instance id for SSM transport
+- `EC2_USER` (optional, default `ec2-user`)
+- `EC2_SSH_PORT` (optional, default `22`)
+- `EC2_SSH_KEY_PATH` (optional)
+- `EC2_REMOTE_DIR` (optional, default `$HOME/lucid-runtime/deploy/ec2` over SSH or `/home/<EC2_USER>/lucid-runtime/deploy/ec2` over SSM)
+- `AWS_PROFILE` (optional): local AWS profile used for automatic ECR login before the image push
+- `EC2_DOCKER_LOGIN_COMMAND` (optional): shell command run on the instance before `docker pull`; useful for private registries
+- `EC2_AWS_PROFILE` (optional): AWS profile on the instance for automatic ECR login if you are not using an instance role/default credentials
+
+## 4) Deploy from your workstation
+
+For this setup, log into AWS with the `lucid` profile and deploy with:
 
 ```bash
-export COORDINATOR_IMAGE=<registry>/lucid-coordinator:<tag>
-bash deploy/ec2/run-coordinator.sh deploy/ec2/coordinator.env
+aws login --profile lucid && deploy/ec2/deploy.sh
 ```
 
-The helper script:
+For ECR, `deploy.sh` automatically logs in locally before the push and automatically logs in on
+the EC2 host before `docker pull` if `EC2_DOCKER_LOGIN_COMMAND` is unset.
+The script prefers SSM for managed instances and falls back to SSH only when SSM is unavailable.
 
-- pulls the image
+The deploy script:
+
+- builds the coordinator image for Linux x86_64 with `docker buildx`
+- pushes it to `COORDINATOR_IMAGE_REPOSITORY`
+- materializes `coordinator.env` and `run-coordinator.sh` on the EC2 host during deployment
+- prefers SSM for managed instances and falls back to SSH otherwise
+- logs into ECR locally when the image repo is ECR
+- runs `EC2_DOCKER_LOGIN_COMMAND` on the instance, or auto-generates the ECR login command when the image repo is ECR
+- pulls the image remotely
 - replaces any existing `lucid-coordinator` container
 - runs it with `--restart unless-stopped`
 
-## 6) Verify from the instance
+Useful variants:
+
+```bash
+# Push a specific tag.
+deploy/ec2/deploy.sh --image-tag "$(git rev-parse --short HEAD)"
+
+# Re-roll an already-pushed image without rebuilding locally.
+deploy/ec2/deploy.sh --skip-build
+```
+
+If you only want to publish the image and skip the EC2 rollout:
+
+```bash
+deploy/ec2/deploy.sh --skip-remote
+```
+
+## 5) Verify from the instance
 
 ```bash
 curl http://127.0.0.1:8080/healthz
@@ -104,7 +136,7 @@ docker logs lucid-coordinator
 docker ps
 ```
 
-## 7) Verify from your workstation
+## 6) Verify from your workstation
 
 ```bash
 curl http://<ec2-public-dns>:8080/healthz
@@ -118,7 +150,7 @@ If that works, the coordinator is reachable for:
 - Modal callbacks to `/internal/sessions/{session_id}/running`
 - Modal callbacks to `/internal/sessions/{session_id}/ended`
 
-## 8) Minimal client smoke test
+## 7) Minimal client smoke test
 
 ```bash
 curl -X POST http://<ec2-public-dns>:8080/sessions \
@@ -138,6 +170,10 @@ If you point the demo app at this coordinator, line these up:
 
 ## Notes
 
-- If you use ECR, authenticate the instance with `aws ecr get-login-password | docker login ...` before pulling.
+- For ECR, the script logs in automatically locally and remotely. If the EC2 host does not use an
+  instance role/default AWS credentials, set `EC2_AWS_PROFILE` or override with
+  `EC2_DOCKER_LOGIN_COMMAND`.
+- For the default SSM path, the instance must be online in Systems Manager. If it is not, either
+  fix SSM or force `EC2_DEPLOY_TRANSPORT=ssh` and open port `22/tcp`.
 - `t3.micro` has limited memory. Pulling and running the final image is fine; Rust compilation on-instance is the wrong tradeoff.
 - If you need TLS, put the instance behind an ALB or a small reverse proxy and change `COORDINATOR_CALLBACK_BASE_URL` to `https://...`.
