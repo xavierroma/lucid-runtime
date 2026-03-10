@@ -1,6 +1,7 @@
 pub mod api_internal;
 pub mod api_public;
 pub mod auth;
+pub mod capabilities;
 pub mod config;
 pub mod livekit_tokens;
 pub mod modal_dispatch;
@@ -53,24 +54,21 @@ impl AppContext {
 pub fn build_router(ctx: AppContext) -> Router {
     Router::new()
         .route("/healthz", axum::routing::get(api_public::healthz))
+        .route("/sessions", axum::routing::post(api_public::create_session))
         .route(
-            "/v1/sessions",
-            axum::routing::post(api_public::create_session),
-        )
-        .route(
-            "/v1/sessions/:session_id",
+            "/sessions/:session_id",
             axum::routing::get(api_public::get_session).post(api_public::end_session),
         )
         .route(
-            "/internal/v1/sessions/:session_id/running",
+            "/internal/sessions/:session_id/running",
             axum::routing::post(api_internal::mark_running),
         )
         .route(
-            "/internal/v1/sessions/:session_id/heartbeat",
+            "/internal/sessions/:session_id/heartbeat",
             axum::routing::post(api_internal::mark_heartbeat),
         )
         .route(
-            "/internal/v1/sessions/:session_id/ended",
+            "/internal/sessions/:session_id/ended",
             axum::routing::post(api_internal::mark_ended),
         )
         .with_state(ctx)
@@ -185,7 +183,7 @@ mod tests {
         modal_dispatch::{
             LaunchSessionRequest, ModalDispatch, ModalDispatchError, ModalExecutionStatus,
         },
-        models::{CreateSessionResponse, SessionState},
+        models::{SessionResponse, SessionState},
         AppContext,
     };
 
@@ -282,13 +280,13 @@ mod tests {
         serde_json::from_slice(&body).expect("response body should be JSON")
     }
 
-    async fn create_session(app: &Router, config: &Config) -> (StatusCode, CreateSessionResponse) {
+    async fn create_session(app: &Router, config: &Config) -> (StatusCode, SessionResponse) {
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/v1/sessions")
+                    .uri("/sessions")
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -300,7 +298,7 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body should be readable");
-        let payload = serde_json::from_slice::<CreateSessionResponse>(&body)
+        let payload = serde_json::from_slice::<SessionResponse>(&body)
             .expect("create session body should decode");
         (status, payload)
     }
@@ -344,7 +342,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/v1/sessions")
+                    .uri("/sessions")
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -367,7 +365,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri("/v1/sessions")
+                    .uri("/sessions")
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -389,7 +387,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/v1/sessions/{}", created.session.session_id))
+                    .uri(format!("/sessions/{}", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -403,7 +401,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/v1/sessions/{}", Uuid::new_v4()))
+                    .uri(format!("/sessions/{}", Uuid::new_v4()))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -424,7 +422,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(format!("/v1/sessions/{}:end", created.session.session_id))
+                    .uri(format!("/sessions/{}:end", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -439,7 +437,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/v1/sessions/{}", created.session.session_id))
+                    .uri(format!("/sessions/{}", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -447,15 +445,15 @@ mod tests {
             .await
             .expect("request should succeed");
         let payload = read_json(get).await;
-        assert_eq!(payload["state"], "CANCELING");
-        assert_eq!(payload["end_reason"], "CLIENT_REQUESTED");
+        assert_eq!(payload["session"]["state"], "CANCELING");
+        assert_eq!(payload["session"]["end_reason"], "CLIENT_REQUESTED");
 
         let second_end = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(format!("/v1/sessions/{}:end", created.session.session_id))
+                    .uri(format!("/sessions/{}:end", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -478,7 +476,7 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri(format!(
-                        "/internal/v1/sessions/{}/running",
+                        "/internal/sessions/{}/running",
                         created.session.session_id
                     ))
                     .header(
@@ -498,7 +496,7 @@ mod tests {
                 Request::builder()
                     .method(Method::POST)
                     .uri(format!(
-                        "/internal/v1/sessions/{}/ended",
+                        "/internal/sessions/{}/ended",
                         created.session.session_id
                     ))
                     .header(
@@ -520,7 +518,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::GET)
-                    .uri(format!("/v1/sessions/{}", created.session.session_id))
+                    .uri(format!("/sessions/{}", created.session.session_id))
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -528,9 +526,9 @@ mod tests {
             .await
             .expect("request should succeed");
         let payload = read_json(get).await;
-        assert_eq!(payload["state"], "FAILED");
-        assert_eq!(payload["error_code"], "MODEL_RUNTIME_ERROR");
-        assert_eq!(payload["end_reason"], "WORKER_REPORTED_ERROR");
+        assert_eq!(payload["session"]["state"], "FAILED");
+        assert_eq!(payload["session"]["error_code"], "MODEL_RUNTIME_ERROR");
+        assert_eq!(payload["session"]["end_reason"], "WORKER_REPORTED_ERROR");
     }
 
     #[tokio::test]
@@ -544,7 +542,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(format!("/internal/v1/sessions/{session_id}/running"))
+                    .uri(format!("/internal/sessions/{session_id}/running"))
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -557,7 +555,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method(Method::POST)
-                    .uri(format!("/internal/v1/sessions/{session_id}/heartbeat"))
+                    .uri(format!("/internal/sessions/{session_id}/heartbeat"))
                     .body(Body::empty())
                     .expect("request should build"),
             )

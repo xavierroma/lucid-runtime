@@ -1,4 +1,5 @@
 import { demoEnv } from "@/lib/env"
+import { lucidManifest } from "@/lib/generated/lucid"
 
 export type SessionState =
   | "STARTING"
@@ -15,9 +16,24 @@ export interface SessionRecord {
   end_reason?: string | null
 }
 
-export interface CreateSessionResponse {
+export interface OutputBinding {
+  name: string
+  kind: string
+  track_name?: string | null
+  topic?: string | null
+}
+
+export interface Capabilities {
+  control_topic: string
+  status_topic: string
+  manifest: typeof lucidManifest
+  output_bindings: OutputBinding[]
+}
+
+export interface SessionResponse {
   session: SessionRecord
   client_access_token?: string | null
+  capabilities: Capabilities
 }
 
 interface ErrorResponse {
@@ -66,17 +82,17 @@ async function request<T>(path: string, init?: RequestInit) {
 }
 
 export async function createSession() {
-  return request<CreateSessionResponse>("/v1/sessions", {
+  return request<SessionResponse>("/sessions", {
     method: "POST",
   })
 }
 
 export async function getSession(sessionId: string) {
-  return request<SessionRecord>(`/v1/sessions/${sessionId}`)
+  return request<SessionResponse>(`/sessions/${sessionId}`)
 }
 
 export async function endSession(sessionId: string) {
-  return request<void>(`/v1/sessions/${sessionId}:end`, {
+  return request<void>(`/sessions/${sessionId}:end`, {
     method: "POST",
   })
 }

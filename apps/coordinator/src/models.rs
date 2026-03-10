@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
-pub const VIDEO_TRACK_NAME: &str = "main_video";
-pub const CONTROL_TOPIC: &str = "wm.control.v1";
+pub const CONTROL_TOPIC: &str = "wm.control";
+pub const STATUS_TOPIC: &str = "wm.status";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -51,10 +52,29 @@ pub struct Session {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CreateSessionResponse {
+pub struct OutputBinding {
+    pub name: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub control_topic: String,
+    pub status_topic: String,
+    pub manifest: Value,
+    pub output_bindings: Vec<OutputBinding>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionResponse {
     pub session: Session,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_access_token: Option<String>,
+    pub capabilities: Capabilities,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1,13 +1,13 @@
 # Coordinator (Rust)
 
-CPU control-plane service for request-based V1 session lifecycle + Modal dispatch.
+CPU control-plane service for request-based session lifecycle + Modal dispatch.
 
 ## Public API
 
 - `GET /healthz`
-- `POST /v1/sessions` (async; returns `202 Accepted`)
-- `GET /v1/sessions/{session_id}`
-- `POST /v1/sessions/{session_id}:end`
+- `POST /sessions` (async; returns `202 Accepted`)
+- `GET /sessions/{session_id}`
+- `POST /sessions/{session_id}:end`
 
 Public API uses bearer auth:
 
@@ -15,9 +15,9 @@ Public API uses bearer auth:
 
 ## Internal runtime callback API
 
-- `POST /internal/v1/sessions/{session_id}/running`
-- `POST /internal/v1/sessions/{session_id}/heartbeat`
-- `POST /internal/v1/sessions/{session_id}/ended`
+- `POST /internal/sessions/{session_id}/running`
+- `POST /internal/sessions/{session_id}/heartbeat`
+- `POST /internal/sessions/{session_id}/ended`
 
 Internal API uses bearer auth:
 

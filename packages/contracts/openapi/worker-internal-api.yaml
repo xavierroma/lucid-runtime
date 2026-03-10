@@ -5,7 +5,7 @@ info:
 servers:
   - url: https://coordinator.example.com
 paths:
-  /internal/v1/sessions/{session_id}/running:
+  /internal/sessions/{session_id}/running:
     post:
       summary: Mark session as running
       security:
@@ -26,7 +26,7 @@ paths:
           description: Session not found
         '409':
           description: Invalid state transition
-  /internal/v1/sessions/{session_id}/heartbeat:
+  /internal/sessions/{session_id}/heartbeat:
     post:
       summary: Report worker heartbeat
       security:
@@ -47,7 +47,7 @@ paths:
           description: Session not found
         '409':
           description: Invalid state transition
-  /internal/v1/sessions/{session_id}/ended:
+  /internal/sessions/{session_id}/ended:
     post:
       summary: Mark session ended from runtime
       security:
