@@ -48,6 +48,7 @@ struct SessionRecord {
     session: Session,
     modal_function_call_id: String,
     created_at: Instant,
+    ready_at: Option<Instant>,
     running_at: Option<Instant>,
     last_heartbeat_at: Option<Instant>,
     cancel_requested_at: Option<Instant>,
@@ -59,7 +60,6 @@ struct SessionRecord {
 #[derive(Clone, Debug)]
 pub struct RuntimeState {
     sessions: HashMap<Uuid, SessionRecord>,
-    active_session: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,7 +79,7 @@ pub struct EndRequestResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ActiveSessionSnapshot {
+pub struct SessionSnapshot {
     pub session_id: Uuid,
     pub function_call_id: String,
 }
@@ -97,16 +97,11 @@ impl RuntimeState {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
-            active_session: None,
         }
     }
 
     pub fn room_name_for(session_id: Uuid) -> String {
         format!("wm-{session_id}")
-    }
-
-    pub fn can_create_session(&self) -> bool {
-        self.active_session.is_none()
     }
 
     pub fn create_session(
@@ -128,6 +123,7 @@ impl RuntimeState {
                 session: session.clone(),
                 modal_function_call_id,
                 created_at: now,
+                ready_at: None,
                 running_at: None,
                 last_heartbeat_at: None,
                 cancel_requested_at: None,
@@ -136,7 +132,6 @@ impl RuntimeState {
                 pending_terminal: None,
             },
         );
-        self.active_session = Some(session_id);
         session
     }
 
@@ -146,13 +141,22 @@ impl RuntimeState {
             .map(|record| record.session.clone())
     }
 
-    pub fn active_session_snapshot(&self) -> Option<ActiveSessionSnapshot> {
-        let session_id = self.active_session?;
-        let record = self.sessions.get(&session_id)?;
-        Some(ActiveSessionSnapshot {
-            session_id,
-            function_call_id: record.modal_function_call_id.clone(),
-        })
+    pub(crate) fn non_terminal_session_snapshots(&self) -> Vec<SessionSnapshot> {
+        let mut snapshots = self
+            .sessions
+            .iter()
+            .filter_map(|(session_id, record)| {
+                if record.session.state.is_terminal() {
+                    return None;
+                }
+                Some(SessionSnapshot {
+                    session_id: *session_id,
+                    function_call_id: record.modal_function_call_id.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.function_call_id.cmp(&right.function_call_id));
+        snapshots
     }
 
     pub fn request_end_session(
@@ -217,20 +221,41 @@ impl RuntimeState {
         let Some(record) = self.sessions.get_mut(session_id) else {
             return Err(SessionTransitionError::NotFound);
         };
-        if self.active_session != Some(*session_id) {
-            return Err(SessionTransitionError::InvalidState);
-        }
 
         match record.session.state {
-            SessionState::Starting => {
+            SessionState::Ready => {
                 record.session.state = SessionState::Running;
             }
-            SessionState::Canceling => {}
+            SessionState::Canceling => return Ok(()),
             _ => return Err(SessionTransitionError::InvalidState),
         }
 
         if record.running_at.is_none() {
             record.running_at = Some(now);
+        }
+        record.last_heartbeat_at = Some(now);
+        Ok(())
+    }
+
+    pub fn mark_ready(
+        &mut self,
+        session_id: &Uuid,
+        now: Instant,
+    ) -> Result<(), SessionTransitionError> {
+        let Some(record) = self.sessions.get_mut(session_id) else {
+            return Err(SessionTransitionError::NotFound);
+        };
+
+        match record.session.state {
+            SessionState::Starting => {
+                record.session.state = SessionState::Ready;
+            }
+            SessionState::Canceling => return Ok(()),
+            _ => return Err(SessionTransitionError::InvalidState),
+        }
+
+        if record.ready_at.is_none() {
+            record.ready_at = Some(now);
         }
         record.last_heartbeat_at = Some(now);
         Ok(())
@@ -270,7 +295,7 @@ impl RuntimeState {
         self.finish_session(session_id, state, final_error_code, final_end_reason)
     }
 
-    pub fn reconcile_active_session(
+    pub fn reconcile_session(
         &mut self,
         session_id: &Uuid,
         function_call_id: &str,
@@ -284,9 +309,7 @@ impl RuntimeState {
         let Some(record) = self.sessions.get(session_id) else {
             return Vec::new();
         };
-        if self.active_session != Some(*session_id)
-            || record.modal_function_call_id != function_call_id
-        {
+        if record.modal_function_call_id != function_call_id || record.session.state.is_terminal() {
             return Vec::new();
         }
 
@@ -380,11 +403,13 @@ impl RuntimeState {
             );
         }
 
-        if record.session.state == SessionState::Running
-            && record
-                .running_at
-                .filter(|started| now.duration_since(*started) > max_duration)
-                .is_some()
+        if matches!(
+            record.session.state,
+            SessionState::Ready | SessionState::Running
+        ) && record
+            .ready_at
+            .filter(|ready| now.duration_since(*ready) > max_duration)
+            .is_some()
         {
             Self::begin_canceling(
                 record,
@@ -396,11 +421,13 @@ impl RuntimeState {
             );
         }
 
-        if record.session.state == SessionState::Running
-            && record
-                .last_heartbeat_at
-                .filter(|heartbeat| now.duration_since(*heartbeat) > worker_heartbeat_timeout)
-                .is_some()
+        if matches!(
+            record.session.state,
+            SessionState::Ready | SessionState::Running
+        ) && record
+            .last_heartbeat_at
+            .filter(|heartbeat| now.duration_since(*heartbeat) > worker_heartbeat_timeout)
+            .is_some()
         {
             Self::begin_canceling(
                 record,
@@ -483,14 +510,13 @@ impl RuntimeState {
         record.session.state = state;
         record.session.error_code = error_code;
         record.session.end_reason = end_reason;
+        record.ready_at = None;
+        record.running_at = None;
+        record.last_heartbeat_at = None;
         record.pending_terminal = None;
         record.cancel_requested_at = None;
         record.cancel_dispatched_at = None;
         record.force_cancel_dispatched_at = None;
-
-        if self.active_session == Some(*session_id) {
-            self.active_session = None;
-        }
         true
     }
 }
@@ -518,7 +544,7 @@ mod tests {
         state.create_session(session_id, "call-1".to_string(), Instant::now());
 
         advance(Duration::from_secs(121)).await;
-        let commands = state.reconcile_active_session(
+        let commands = state.reconcile_session(
             &session_id,
             "call-1",
             Some(ModalExecutionStatus::Pending),
@@ -544,7 +570,7 @@ mod tests {
         assert_eq!(session.end_reason, Some(SessionEndReason::StartupTimeout));
 
         state.mark_cancel_dispatched(&session_id, Instant::now(), false);
-        let commands = state.reconcile_active_session(
+        let commands = state.reconcile_session(
             &session_id,
             "call-1",
             Some(ModalExecutionStatus::Terminated),
@@ -562,5 +588,144 @@ mod tests {
         assert_eq!(session.state, SessionState::Failed);
         assert_eq!(session.error_code, Some(STARTUP_TIMEOUT_ERROR.to_string()));
         assert_eq!(session.end_reason, Some(SessionEndReason::StartupTimeout));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ready_session_times_out_before_model_start() {
+        let mut state = RuntimeState::new();
+        let session_id = Uuid::new_v4();
+        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state
+            .mark_ready(&session_id, Instant::now())
+            .expect("ready transition should succeed");
+
+        advance(Duration::from_secs(3601)).await;
+        let commands = state.reconcile_session(
+            &session_id,
+            "call-1",
+            Some(ModalExecutionStatus::Pending),
+            Instant::now(),
+            Duration::from_secs(120),
+            Duration::from_secs(3600),
+            Duration::from_secs(30),
+            Duration::from_secs(15),
+        );
+
+        assert_eq!(
+            commands,
+            vec![ReconcileCommand::CancelModal {
+                session_id,
+                function_call_id: "call-1".to_string(),
+                force: false,
+            }]
+        );
+        let session = state
+            .get_session(&session_id)
+            .expect("session should still exist");
+        assert_eq!(session.state, SessionState::Canceling);
+        assert_eq!(session.end_reason, Some(SessionEndReason::SessionTimeout));
+    }
+
+    #[test]
+    fn multiple_sessions_transition_independently() {
+        let mut state = RuntimeState::new();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        state.create_session(first, "call-1".to_string(), Instant::now());
+        state.create_session(second, "call-2".to_string(), Instant::now());
+
+        assert_eq!(state.mark_ready(&first, Instant::now()), Ok(()));
+        assert_eq!(state.mark_running(&first, Instant::now()), Ok(()));
+        assert_eq!(state.mark_ready(&second, Instant::now()), Ok(()));
+
+        let first_session = state
+            .get_session(&first)
+            .expect("first session should exist");
+        let second_session = state
+            .get_session(&second)
+            .expect("second session should exist");
+        assert_eq!(first_session.state, SessionState::Running);
+        assert_eq!(second_session.state, SessionState::Ready);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reconcile_session_only_affects_the_target_session() {
+        let mut state = RuntimeState::new();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        state.create_session(first, "call-1".to_string(), Instant::now());
+        state.create_session(second, "call-2".to_string(), Instant::now());
+
+        advance(Duration::from_secs(121)).await;
+        let commands = state.reconcile_session(
+            &first,
+            "call-1",
+            Some(ModalExecutionStatus::Pending),
+            Instant::now(),
+            Duration::from_secs(120),
+            Duration::from_secs(3600),
+            Duration::from_secs(30),
+            Duration::from_secs(15),
+        );
+
+        assert_eq!(
+            commands,
+            vec![ReconcileCommand::CancelModal {
+                session_id: first,
+                function_call_id: "call-1".to_string(),
+                force: false,
+            }]
+        );
+        assert_eq!(
+            state
+                .get_session(&first)
+                .expect("first session should exist")
+                .state,
+            SessionState::Canceling
+        );
+        assert_eq!(
+            state
+                .get_session(&second)
+                .expect("second session should exist")
+                .state,
+            SessionState::Starting
+        );
+    }
+
+    #[test]
+    fn non_terminal_snapshots_exclude_finished_sessions() {
+        let mut state = RuntimeState::new();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        state.create_session(first, "call-1".to_string(), Instant::now());
+        state.create_session(second, "call-2".to_string(), Instant::now());
+        assert!(state.mark_ended(&first, None, None));
+
+        assert_eq!(
+            state.non_terminal_session_snapshots(),
+            vec![SessionSnapshot {
+                session_id: second,
+                function_call_id: "call-2".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn ready_must_precede_running() {
+        let mut state = RuntimeState::new();
+        let session_id = Uuid::new_v4();
+        state.create_session(session_id, "call-1".to_string(), Instant::now());
+
+        assert_eq!(
+            state.mark_running(&session_id, Instant::now()),
+            Err(SessionTransitionError::InvalidState)
+        );
+        assert_eq!(state.mark_ready(&session_id, Instant::now()), Ok(()));
+        assert_eq!(state.mark_running(&session_id, Instant::now()), Ok(()));
+
+        let session = state
+            .get_session(&session_id)
+            .expect("session should still exist");
+        assert_eq!(session.state, SessionState::Running);
     }
 }

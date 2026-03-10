@@ -15,6 +15,7 @@ Public API uses bearer auth:
 
 ## Internal runtime callback API
 
+- `POST /internal/sessions/{session_id}/ready`
 - `POST /internal/sessions/{session_id}/running`
 - `POST /internal/sessions/{session_id}/heartbeat`
 - `POST /internal/sessions/{session_id}/ended`
@@ -25,9 +26,11 @@ Internal API uses bearer auth:
 
 ## Runtime behavior
 
-- In-memory session state only (`STARTING -> RUNNING -> CANCELING -> ENDED|FAILED`)
-- Single active session invariant
+- In-memory session state only (`STARTING -> READY -> RUNNING -> CANCELING -> ENDED|FAILED`)
+- Multiple concurrent sessions are tracked in memory
 - Session create dispatches to Modal and stores `function_call_id`
+- Workers mark sessions `READY` once they have joined LiveKit and are ready for control
+- Sessions stay `READY` until a client sends `lucid.runtime.start`
 - Public end requests are idempotent and move sessions into `CANCELING`
 - Background reconciliation polls Modal status, consumes worker heartbeats, and escalates cancel requests before failing stuck sessions
 
@@ -61,7 +64,8 @@ Optional environment variables:
 
 If `model_name` is provided, it must match `WM_MODEL_NAME`. The coordinator is still a
 single-model deployment, so this is a guardrail for clients such as the demo app rather than
-multi-model routing.
+multi-model routing. `POST /sessions` no longer returns `409` for runtime capacity; `409` is
+reserved for requested model mismatches.
 
 ## Local run
 
