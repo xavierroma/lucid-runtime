@@ -124,6 +124,49 @@ async def test_start_session_updates_prompt_and_controls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_session_commits_compiler_cache_after_first_frame(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    engine = _StubEngine()
+    model = _build_model(engine)
+    commit_calls: list[str] = []
+
+    class _FakeVolume:
+        def commit(self) -> None:
+            commit_calls.append("commit")
+
+    fake_modal = types.SimpleNamespace(
+        Volume=types.SimpleNamespace(
+            from_name=lambda name: commit_calls.append(name) or _FakeVolume()
+        )
+    )
+
+    monkeypatch.setenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
+    monkeypatch.setenv("MODAL_COMPILER_CACHE_ROOT", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "modal", fake_modal)
+
+    ctx: SessionContext | None = None
+
+    async def publish_fn(_name: str, _payload: object, _ts_ms: int | None) -> None:
+        assert ctx is not None
+        if len(commit_calls) >= 2:
+            ctx.running = False
+
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=model.resolve_outputs((WaypointLucidModel.main_video,)),
+        publish_fn=publish_fn,
+        logger=logging.getLogger("tests.waypoint_model"),
+    )
+
+    await asyncio.wait_for(model.start_session(ctx), timeout=1.0)
+
+    assert commit_calls == ["lucid-hf-cache", "commit"]
+
+
+@pytest.mark.asyncio
 async def test_end_session_delegates_to_engine() -> None:
     engine = _StubEngine()
     model = _build_model(engine)
@@ -185,6 +228,44 @@ async def test_end_session_commits_compiler_cache_volume(
 
 
 @pytest.mark.asyncio
+async def test_model_load_commits_compiler_cache_after_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    commit_calls: list[str] = []
+
+    class _FakeVolume:
+        def commit(self) -> None:
+            commit_calls.append("commit")
+
+    class _StubLoadEngine:
+        def __init__(self, runtime_config, logger) -> None:
+            self.runtime_config = runtime_config
+            self.logger = logger
+
+        async def load(self) -> None:
+            return None
+
+    fake_modal = types.SimpleNamespace(
+        Volume=types.SimpleNamespace(
+            from_name=lambda name: commit_calls.append(name) or _FakeVolume()
+        )
+    )
+
+    monkeypatch.setenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
+    monkeypatch.setenv("MODAL_COMPILER_CACHE_ROOT", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "modal", fake_modal)
+    monkeypatch.setattr("waypoint_modal_example.model.WaypointEngine", _StubLoadEngine)
+
+    model = WaypointLucidModel({})
+    model.bind_runtime(_runtime_config(warmup_on_load=True), logging.getLogger("tests.waypoint_model"))
+
+    await model.load()
+
+    assert commit_calls == ["lucid-hf-cache", "commit"]
+
+
+@pytest.mark.asyncio
 async def test_engine_load_skips_warmup_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = WaypointEngine(_runtime_config(warmup_on_load=False), logging.getLogger("tests.waypoint"))
 
@@ -236,3 +317,26 @@ async def test_engine_load_runs_warmup_when_enabled(monkeypatch: pytest.MonkeyPa
     await engine.load()
 
     assert warmup_calls == ["warmup"]
+
+
+def test_engine_rolls_session_before_exceeding_frame_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = WaypointEngine(_runtime_config(), logging.getLogger("tests.waypoint"))
+    engine._engine = types.SimpleNamespace(
+        model_cfg=types.SimpleNamespace(n_frames=3),
+        frame_ts=np.array([[3]], dtype=np.int64),
+    )
+    engine._seed_frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    engine._last_frame = np.full((4, 4, 3), 9, dtype=np.uint8)
+    engine._current_prompt = "roll prompt"
+
+    rollover_calls: list[tuple[str, int]] = []
+
+    def fake_reset(prompt: str, seed_frame: np.ndarray | None = None) -> None:
+        assert seed_frame is not None
+        rollover_calls.append((prompt, int(seed_frame[0, 0, 0])))
+
+    monkeypatch.setattr(engine, "_reset_session_sync", fake_reset)
+
+    engine._roll_session_if_needed_sync()
+
+    assert rollover_calls == [("roll prompt", 9)]
