@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react"
-import { LoaderCircle, Play, Power, SendHorizonal } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { LoaderCircle, Play, Power } from "lucide-react"
 
 import {
   ConsoleRoom,
-  type QueuedPrompt,
-  type QueuedStart,
+  type QueuedLaunch,
+  type QueuedMouseMove,
+  type QueuedScroll,
 } from "@/components/console-room"
+import {
+  EnvironmentStudio,
+  type SaveEnvironmentInput,
+} from "@/components/environment-studio"
+import { WaypointControls } from "@/components/waypoint-controls"
 import type {
   WaypointControlState,
   WaypointHoldControl,
@@ -26,16 +32,36 @@ import {
   type SessionResponse,
 } from "@/lib/coordinator"
 import { demoEnv, getMissingConfig } from "@/lib/env"
+import {
+  createEnvironmentId,
+  loadSavedEnvironments,
+  loadSelectedEnvironmentId,
+  persistSavedEnvironments,
+  persistSelectedEnvironmentId,
+  type SavedEnvironment,
+} from "@/lib/environments"
+import {
+  buildWaypointControlState,
+  sortUniqueButtonIds,
+  toWaypointLookPreview,
+  waypointButtonIdForHoldControl,
+  waypointButtonIdForKeyboardCode,
+  WAYPOINT_MOUSE_WHEEL_STEP,
+} from "@/lib/waypoint"
 
 type DemoModelName = "yume" | "waypoint"
-
 type DisplayTone = "off" | "warm" | "live" | "fault"
+type AppRoute = "/" | "/environments"
 
 interface DisplayStatus {
   label: string
   detail: string
   tone: DisplayTone
 }
+
+type WaypointButtonSourceMap = Record<string, number>
+
+const ENVIRONMENT_ROUTE: AppRoute = "/environments"
 
 const DEFAULT_WAYPOINT_CONTROLS: WaypointControlState = {
   forward: false,
@@ -75,9 +101,21 @@ function hasPromptAction(capabilities: Capabilities | null) {
   )
 }
 
-function hasControlAction(capabilities: Capabilities | null) {
+function hasWaypointButtonAction(capabilities: Capabilities | null) {
   return Boolean(
-    capabilities?.manifest.actions.find((action) => action.name === "set_controls"),
+    capabilities?.manifest.actions.find((action) => action.name === "set_buttons"),
+  )
+}
+
+function hasWaypointMouseMoveAction(capabilities: Capabilities | null) {
+  return Boolean(
+    capabilities?.manifest.actions.find((action) => action.name === "mouse_move"),
+  )
+}
+
+function hasWaypointScrollAction(capabilities: Capabilities | null) {
+  return Boolean(
+    capabilities?.manifest.actions.find((action) => action.name === "scroll"),
   )
 }
 
@@ -96,6 +134,16 @@ function normalizeModelName(value: string | null | undefined): DemoModelName | n
 
 function modelLabel(modelName: DemoModelName) {
   return MODEL_OPTIONS.find((option) => option.name === modelName)?.label ?? modelName
+}
+
+function normalizeRoute(pathname: string): AppRoute {
+  return pathname === ENVIRONMENT_ROUTE ? ENVIRONMENT_ROUTE : "/"
+}
+
+function sortEnvironments(environments: SavedEnvironment[]) {
+  return [...environments].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt),
+  )
 }
 
 function buildDisplayStatus(args: {
@@ -180,7 +228,7 @@ function buildDisplayStatus(args: {
   if (session.state === "READY") {
     return {
       label: "READY",
-      detail: "Worker allocated. Send conditioning, then press Start.",
+      detail: "Worker allocated. Pick a saved environment, then press Start.",
       tone: "warm",
     }
   }
@@ -210,36 +258,81 @@ function buildDisplayStatus(args: {
 
 export function App() {
   const missingConfig = useMemo(() => getMissingConfig(), [])
+  const [route, setRoute] = useState<AppRoute>(() =>
+    normalizeRoute(window.location.pathname),
+  )
+  const [environments, setEnvironments] = useState<SavedEnvironment[]>(() =>
+    loadSavedEnvironments(),
+  )
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string | null>(() =>
+    loadSelectedEnvironmentId(),
+  )
   const [sessionResponse, setSessionResponse] = useState<SessionResponse | null>(null)
   const [sessionToken, setSessionToken] = useState<string | null>(null)
-  const [prompt, setPrompt] = useState("")
-  const [queuedPrompt, setQueuedPrompt] = useState<QueuedPrompt | null>(null)
-  const [queuedStart, setQueuedStart] = useState<QueuedStart | null>(null)
+  const [queuedLaunch, setQueuedLaunch] = useState<QueuedLaunch | null>(null)
   const [selectedModel, setSelectedModel] = useState<DemoModelName>(demoEnv.defaultModel)
-  const [waypointControls, setWaypointControls] =
-    useState<WaypointControlState>(DEFAULT_WAYPOINT_CONTROLS)
+  const [waypointButtonSources, setWaypointButtonSources] =
+    useState<WaypointButtonSourceMap>({})
+  const [waypointLookPreview, setWaypointLookPreview] = useState(() => ({
+    mouse_x: DEFAULT_WAYPOINT_CONTROLS.mouse_x,
+    mouse_y: DEFAULT_WAYPOINT_CONTROLS.mouse_y,
+  }))
+  const [waypointScrollAmount, setWaypointScrollAmount] = useState(
+    DEFAULT_WAYPOINT_CONTROLS.scroll_wheel,
+  )
+  const [queuedMouseMove, setQueuedMouseMove] = useState<QueuedMouseMove | null>(null)
+  const [queuedScroll, setQueuedScroll] = useState<QueuedScroll | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [roomError, setRoomError] = useState<string | null>(null)
   const [createPending, setCreatePending] = useState(false)
   const [endPending, setEndPending] = useState(false)
-  const [promptPending, setPromptPending] = useState(false)
   const [startPending, setStartPending] = useState(false)
   const [roomConnected, setRoomConnected] = useState(false)
   const [trackReady, setTrackReady] = useState(false)
+  const actionNonceRef = useRef(0)
 
   const session = sessionResponse?.session ?? null
   const capabilities = sessionResponse?.capabilities ?? null
+  const selectedEnvironment = useMemo(
+    () =>
+      environments.find((environment) => environment.id === selectedEnvironmentId) ?? null,
+    [environments, selectedEnvironmentId],
+  )
+  const selectedEnvironmentPrompt = selectedEnvironment?.prompt.trim() ?? ""
   const canCreateSession = !session || isTerminalSessionState(session.state)
   const hasActiveSession = Boolean(session && !isTerminalSessionState(session.state))
   const resolvedModel =
     normalizeModelName(capabilities?.manifest.model.name) ?? selectedModel
   const promptSupported = hasPromptAction(capabilities)
   const startSupported = hasStartAction(capabilities)
-  const controlsSupported = hasControlAction(capabilities)
+  const waypointButtonsSupported = hasWaypointButtonAction(capabilities)
+  const waypointMouseMoveSupported = hasWaypointMouseMoveAction(capabilities)
+  const waypointScrollSupported = hasWaypointScrollAction(capabilities)
+  const waypointControlSurfaceSupported =
+    waypointButtonsSupported &&
+    waypointMouseMoveSupported &&
+    waypointScrollSupported
   const waypointModelActive = resolvedModel === "waypoint"
-  const promptText = prompt.trim()
-  const canSendPrompt = Boolean(hasActiveSession && promptSupported && promptText)
-  const canStartSession = Boolean(session?.state === "READY" && startSupported)
+  const showWaypointControls = waypointModelActive && hasActiveSession
+  const waypointButtonIds = useMemo(
+    () => sortUniqueButtonIds(Object.values(waypointButtonSources)),
+    [waypointButtonSources],
+  )
+  const waypointControls: WaypointControlState = useMemo(
+    () =>
+      buildWaypointControlState({
+        buttonIds: waypointButtonIds,
+        mouseX: waypointLookPreview.mouse_x,
+        mouseY: waypointLookPreview.mouse_y,
+        scrollAmount: waypointScrollAmount,
+      }),
+    [waypointButtonIds, waypointLookPreview.mouse_x, waypointLookPreview.mouse_y, waypointScrollAmount],
+  )
+  const canStartSession = Boolean(
+    session?.state === "READY" &&
+      startSupported &&
+      (!promptSupported || selectedEnvironmentPrompt),
+  )
   const status = buildDisplayStatus({
     session,
     modelName: resolvedModel,
@@ -253,6 +346,43 @@ export function App() {
   })
 
   useEffect(() => {
+    const handlePopState = () => {
+      setRoute(normalizeRoute(window.location.pathname))
+    }
+
+    window.addEventListener("popstate", handlePopState)
+    return () => {
+      window.removeEventListener("popstate", handlePopState)
+    }
+  }, [])
+
+  useEffect(() => {
+    persistSavedEnvironments(environments)
+  }, [environments])
+
+  useEffect(() => {
+    persistSelectedEnvironmentId(selectedEnvironmentId)
+  }, [selectedEnvironmentId])
+
+  useEffect(() => {
+    if (!environments.length) {
+      if (selectedEnvironmentId !== null) {
+        setSelectedEnvironmentId(null)
+      }
+      return
+    }
+
+    if (!selectedEnvironmentId) {
+      setSelectedEnvironmentId(environments[0].id)
+      return
+    }
+
+    if (!environments.some((environment) => environment.id === selectedEnvironmentId)) {
+      setSelectedEnvironmentId(environments[0].id)
+    }
+  }, [environments, selectedEnvironmentId])
+
+  useEffect(() => {
     const actualModel = normalizeModelName(capabilities?.manifest.model.name)
     if (actualModel) {
       setSelectedModel(actualModel)
@@ -264,10 +394,8 @@ export function App() {
       setRoomConnected(false)
       setTrackReady(false)
       if (isTerminalSessionState(session?.state ?? "ENDED")) {
-        setPromptPending(false)
         setStartPending(false)
-        setQueuedPrompt(null)
-        setQueuedStart(null)
+        setQueuedLaunch(null)
       }
       return
     }
@@ -303,15 +431,67 @@ export function App() {
     }
   }, [session?.session_id, session?.state])
 
+  const nextActionNonce = () => {
+    actionNonceRef.current += 1
+    return actionNonceRef.current
+  }
+
+  const setWaypointButtonSource = (
+    sourceId: string,
+    pressed: boolean,
+    buttonId: number,
+  ) => {
+    setWaypointButtonSources((current) => {
+      if (pressed) {
+        if (current[sourceId] === buttonId) {
+          return current
+        }
+        return {
+          ...current,
+          [sourceId]: buttonId,
+        }
+      }
+
+      if (!(sourceId in current)) {
+        return current
+      }
+
+      const next = { ...current }
+      delete next[sourceId]
+      return next
+    })
+  }
+
   useEffect(() => {
     if (hasActiveSession && waypointModelActive) {
       return
     }
-    setWaypointControls(DEFAULT_WAYPOINT_CONTROLS)
+    setWaypointButtonSources({})
+    setWaypointLookPreview({
+      mouse_x: DEFAULT_WAYPOINT_CONTROLS.mouse_x,
+      mouse_y: DEFAULT_WAYPOINT_CONTROLS.mouse_y,
+    })
+    setWaypointScrollAmount(DEFAULT_WAYPOINT_CONTROLS.scroll_wheel)
+    setQueuedMouseMove(null)
+    setQueuedScroll(null)
   }, [hasActiveSession, waypointModelActive])
 
   useEffect(() => {
-    if (!hasActiveSession || !controlsSupported || resolvedModel !== "waypoint") {
+    if (waypointScrollAmount === 0) {
+      return
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setWaypointScrollAmount(0)
+    }, 160)
+
+    return () => {
+      window.clearTimeout(timeoutId)
+    }
+  }, [waypointScrollAmount])
+
+  useEffect(() => {
+    if (!hasActiveSession || !waypointButtonsSupported || resolvedModel !== "waypoint") {
       return
     }
 
@@ -323,100 +503,27 @@ export function App() {
       return tagName === "TEXTAREA" || tagName === "INPUT" || target.isContentEditable
     }
 
-    const updateHold = (control: WaypointHoldControl, pressed: boolean) => {
-      setWaypointControls((current) =>
-        current[control] === pressed
-          ? current
-          : {
-            ...current,
-            [control]: pressed,
-          },
-      )
-    }
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) {
         return
       }
 
-      switch (event.code) {
-        case "KeyW":
-          event.preventDefault()
-          updateHold("forward", true)
-          break
-        case "KeyS":
-          event.preventDefault()
-          updateHold("backward", true)
-          break
-        case "KeyA":
-          event.preventDefault()
-          updateHold("left", true)
-          break
-        case "KeyD":
-          event.preventDefault()
-          updateHold("right", true)
-          break
-        case "Space":
-          event.preventDefault()
-          updateHold("jump", true)
-          break
-        case "ShiftLeft":
-        case "ShiftRight":
-          event.preventDefault()
-          updateHold("sprint", true)
-          break
-        case "ControlLeft":
-        case "ControlRight":
-          event.preventDefault()
-          updateHold("crouch", true)
-          break
-        case "KeyJ":
-          event.preventDefault()
-          updateHold("primary_fire", true)
-          break
-        case "KeyK":
-          event.preventDefault()
-          updateHold("secondary_fire", true)
-          break
-        default:
-          break
+      const buttonId = waypointButtonIdForKeyboardCode(event.code)
+      if (buttonId === null) {
+        return
       }
+
+      event.preventDefault()
+      setWaypointButtonSource(`keyboard:${event.code}`, true, buttonId)
     }
 
     const handleKeyUp = (event: KeyboardEvent) => {
-      switch (event.code) {
-        case "KeyW":
-          updateHold("forward", false)
-          break
-        case "KeyS":
-          updateHold("backward", false)
-          break
-        case "KeyA":
-          updateHold("left", false)
-          break
-        case "KeyD":
-          updateHold("right", false)
-          break
-        case "Space":
-          updateHold("jump", false)
-          break
-        case "ShiftLeft":
-        case "ShiftRight":
-          updateHold("sprint", false)
-          break
-        case "ControlLeft":
-        case "ControlRight":
-          updateHold("crouch", false)
-          break
-        case "KeyJ":
-          updateHold("primary_fire", false)
-          break
-        case "KeyK":
-          updateHold("secondary_fire", false)
-          break
-        default:
-          break
+      const buttonId = waypointButtonIdForKeyboardCode(event.code)
+      if (buttonId === null) {
+        return
       }
+
+      setWaypointButtonSource(`keyboard:${event.code}`, false, buttonId)
     }
 
     window.addEventListener("keydown", handleKeyDown)
@@ -425,21 +532,52 @@ export function App() {
       window.removeEventListener("keydown", handleKeyDown)
       window.removeEventListener("keyup", handleKeyUp)
     }
-  }, [controlsSupported, hasActiveSession, resolvedModel])
+  }, [hasActiveSession, resolvedModel, waypointButtonsSupported])
 
-  const queuePrompt = (value: string) => {
-    setPromptPending(true)
-    setQueuedPrompt({
-      nonce: Date.now(),
-      prompt: value,
-    })
+  const navigateTo = (nextRoute: AppRoute) => {
+    if (window.location.pathname !== nextRoute) {
+      window.history.pushState({}, "", nextRoute)
+    }
+    setRoute(nextRoute)
   }
 
-  const queueStart = () => {
-    setStartPending(true)
-    setQueuedStart({
-      nonce: Date.now(),
-    })
+  const handleSaveEnvironment = (input: SaveEnvironmentInput) => {
+    const timestamp = new Date().toISOString()
+    const existing = input.environmentId
+      ? environments.find((environment) => environment.id === input.environmentId) ?? null
+      : null
+    const nextEnvironment: SavedEnvironment = existing
+      ? {
+          ...existing,
+          name: input.name,
+          prompt: input.prompt,
+          updatedAt: timestamp,
+        }
+      : {
+          id: createEnvironmentId(),
+          name: input.name,
+          prompt: input.prompt,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }
+
+    const nextEnvironments = existing
+      ? sortEnvironments(
+          environments.map((environment) =>
+            environment.id === existing.id ? nextEnvironment : environment,
+          ),
+        )
+      : sortEnvironments([nextEnvironment, ...environments])
+
+    setEnvironments(nextEnvironments)
+    setSelectedEnvironmentId(nextEnvironment.id)
+    return nextEnvironment
+  }
+
+  const handleDeleteEnvironment = (environmentId: string) => {
+    setEnvironments((current) =>
+      current.filter((environment) => environment.id !== environmentId),
+    )
   }
 
   const handleCreateSession = async () => {
@@ -451,9 +589,8 @@ export function App() {
     setCreatePending(true)
     setRequestError(null)
     setRoomError(null)
-    setPromptPending(false)
     setStartPending(false)
-    setQueuedStart(null)
+    setQueuedLaunch(null)
     setRoomConnected(false)
     setTrackReady(false)
 
@@ -465,12 +602,6 @@ export function App() {
 
       setSessionResponse(response)
       setSessionToken(response.client_access_token)
-
-      if (promptText && hasPromptAction(response.capabilities)) {
-        queuePrompt(promptText)
-      } else {
-        setQueuedPrompt(null)
-      }
     } catch (error) {
       setRequestError(
         error instanceof Error ? error.message : "failed to create session",
@@ -507,21 +638,33 @@ export function App() {
     await handleEndSession()
   }
 
-  const handlePromptSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (!canSendPrompt) {
-      return
-    }
-    setRequestError(null)
-    queuePrompt(promptText)
-  }
-
   const handleStart = () => {
     if (!canStartSession) {
+      if (promptSupported && !selectedEnvironmentPrompt) {
+        setRequestError("Choose a saved environment before starting the session.")
+      }
       return
     }
+
     setRequestError(null)
-    queueStart()
+    setStartPending(true)
+    setQueuedLaunch({
+      nonce: nextActionNonce(),
+      prompt: promptSupported ? selectedEnvironmentPrompt : null,
+    })
+  }
+
+  if (route === ENVIRONMENT_ROUTE) {
+    return (
+      <EnvironmentStudio
+        environments={environments}
+        selectedEnvironmentId={selectedEnvironmentId}
+        onSelectEnvironment={setSelectedEnvironmentId}
+        onSaveEnvironment={handleSaveEnvironment}
+        onDeleteEnvironment={handleDeleteEnvironment}
+        onNavigateHome={() => navigateTo("/")}
+      />
+    )
   }
 
   return (
@@ -532,6 +675,13 @@ export function App() {
       >
         <div className="console-body">
           <div className="console-toolbar">
+            <button
+              type="button"
+              className="route-button"
+              onClick={() => navigateTo(ENVIRONMENT_ROUTE)}
+            >
+              Environments
+            </button>
             <button
               type="button"
               className="start-button"
@@ -571,9 +721,10 @@ export function App() {
                 session={session}
                 token={sessionToken}
                 capabilities={capabilities}
-                queuedPrompt={queuedPrompt}
-                queuedStart={queuedStart}
-                controlState={waypointControls}
+                queuedLaunch={queuedLaunch}
+                pressedButtonIds={waypointButtonIds}
+                queuedMouseMove={queuedMouseMove}
+                queuedScroll={queuedScroll}
                 fallback={
                   <div className="screen-fallback">
                     <p className="screen-fallback-kicker">{status.label}</p>
@@ -582,18 +733,12 @@ export function App() {
                 }
                 onConnectionChange={setRoomConnected}
                 onTrackReadyChange={setTrackReady}
-                onPromptSent={() => {
-                  setPromptPending(false)
-                  setQueuedPrompt(null)
-                  setRequestError(null)
-                }}
-                onStartSent={() => {
+                onLaunchSent={() => {
                   setStartPending(false)
-                  setQueuedStart(null)
+                  setQueuedLaunch(null)
                   setRequestError(null)
                 }}
                 onActionError={(message) => {
-                  setPromptPending(false)
                   setStartPending(false)
                   setRequestError(message)
                 }}
@@ -603,31 +748,104 @@ export function App() {
           </div>
 
           <div className="console-inputs">
-            <form className="prompt-panel" onSubmit={handlePromptSubmit}>
-              <textarea
-                className="prompt-textarea"
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder={
-                  waypointModelActive
-                    ? "Guide the world, then drive it with the keyboard..."
-                    : "Type a new prompt for the world..."
-                }
-                spellCheck={false}
+            <section className="environment-selector-panel">
+              <div className="environment-selector-header">
+                <div>
+                  <p className="environment-selector-kicker">Startup environment</p>
+                  <h2>
+                    {selectedEnvironment?.name ?? "Choose a saved environment"}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  className="environment-manage-button"
+                  onClick={() => navigateTo(ENVIRONMENT_ROUTE)}
+                >
+                  Manage Worlds
+                </button>
+              </div>
+
+              {environments.length ? (
+                <>
+                  <div className="environment-select-row">
+                    <Select
+                      value={selectedEnvironmentId ?? undefined}
+                      onValueChange={setSelectedEnvironmentId}
+                    >
+                      <SelectTrigger
+                        aria-label="Environment"
+                        className="h-10 w-full rounded-full px-4 text-sm shadow-none"
+                      >
+                        <SelectValue placeholder="Choose environment" />
+                      </SelectTrigger>
+                      <SelectContent align="start" position="popper" sideOffset={8} className="shadow-none">
+                        {environments.map((environment) => (
+                          <SelectItem
+                            key={environment.id}
+                            value={environment.id}
+                            className="text-sm"
+                          >
+                            {environment.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="environment-preview">
+                    <p className="environment-preview-kicker">Prompt submitted on start</p>
+                    <p className="environment-preview-copy">
+                      {selectedEnvironment?.prompt}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div className="environment-empty-console">
+                  <p>No saved environments yet.</p>
+                  <p>
+                    Create one on the environments route, then come back here to
+                    launch it.
+                  </p>
+                </div>
+              )}
+            </section>
+
+            {showWaypointControls ? (
+              <WaypointControls
+                value={waypointControls}
+                disabled={!waypointControlSurfaceSupported || createPending || endPending}
+                onHoldChange={(control: WaypointHoldControl, pressed: boolean) => {
+                  setWaypointButtonSource(
+                    `deck:${control}`,
+                    pressed,
+                    waypointButtonIdForHoldControl(control),
+                  )
+                }}
+                onLookChange={(deltaX, deltaY) => {
+                  setWaypointLookPreview(toWaypointLookPreview(deltaX, deltaY))
+                  setQueuedMouseMove({
+                    nonce: nextActionNonce(),
+                    dx: deltaX,
+                    dy: deltaY,
+                  })
+                }}
+                onLookReset={() => {
+                  setWaypointLookPreview({
+                    mouse_x: DEFAULT_WAYPOINT_CONTROLS.mouse_x,
+                    mouse_y: DEFAULT_WAYPOINT_CONTROLS.mouse_y,
+                  })
+                }}
+                onScrollNudge={(direction) => {
+                  const amount = direction * WAYPOINT_MOUSE_WHEEL_STEP
+                  setWaypointScrollAmount(amount)
+                  setQueuedScroll({
+                    nonce: nextActionNonce(),
+                    amount,
+                  })
+                }}
               />
-              <button
-                type="submit"
-                className="prompt-send"
-                disabled={!canSendPrompt || promptPending}
-              >
-                {promptPending ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <SendHorizonal className="size-4" />
-                )}
-                Send
-              </button>
-            </form>
+            ) : null}
+
             <div className="model-picker">
               <Select
                 value={selectedModel}
