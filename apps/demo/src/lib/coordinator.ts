@@ -2,6 +2,7 @@ import { demoEnv } from "@/lib/env"
 
 export type SessionState =
   | "STARTING"
+  | "READY"
   | "RUNNING"
   | "CANCELING"
   | "ENDED"

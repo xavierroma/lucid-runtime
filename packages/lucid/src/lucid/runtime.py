@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 import statistics
 from collections.abc import Awaitable, Callable
 from collections import deque
@@ -261,6 +262,12 @@ class VideoModel(LucidModel):
 def runtime_actions_manifest() -> list[dict[str, Any]]:
     return [
         {
+            "name": "lucid.runtime.start",
+            "description": "Begin model generation for the current session.",
+            "mode": "command",
+            "args_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
             "name": "lucid.runtime.pause",
             "description": "Pause model stepping for the current session.",
             "mode": "command",
@@ -340,6 +347,7 @@ class SessionContext:
         self.room_name = room_name
         self.logger = logger
         self.running = True
+        self.started = False
         self.paused = False
         self.state = _StateView()
         self._outputs = {output.name: output for output in outputs}
@@ -349,15 +357,28 @@ class SessionContext:
         self._output_rate_hz = {output.name: None for output in outputs}
         self._last_publish_s = {output.name: 0.0 for output in outputs}
         self._inference_ms: deque[float] = deque(maxlen=128)
+        self._started_event = asyncio.Event()
 
     def clear_state(self, action_name: str) -> None:
         self.state.clear(action_name)
 
     def reset(self) -> None:
         self.state.reset()
+        self.started = False
         self.paused = False
         self._output_enabled = {name: True for name in self._outputs}
         self._output_rate_hz = {name: None for name in self._outputs}
+        self._started_event = asyncio.Event()
+
+    def mark_started(self) -> None:
+        self.started = True
+        self.paused = False
+        self._started_event.set()
+
+    async def wait_until_started(self) -> None:
+        if self.started:
+            return
+        await self._started_event.wait()
 
     def set_output_enabled(self, name: str, enabled: bool) -> None:
         self._require_output(name)
@@ -493,6 +514,7 @@ class LucidRuntime:
         logger: logging.Logger,
         model_name: str | None = None,
     ) -> "LucidRuntime":
+        resolved_model_name = model_name or os.getenv("WM_MODEL_NAME", "").strip() or None
         definitions = registry.all()
         if not definitions:
             try:
@@ -504,8 +526,8 @@ class LucidRuntime:
             definitions = registry.all()
         if not definitions:
             raise LucidError("no lucid models are registered")
-        if model_name:
-            definition = registry.get(model_name)
+        if resolved_model_name:
+            definition = registry.get(resolved_model_name)
         elif len(definitions) == 1:
             definition = definitions[0]
         else:
@@ -600,11 +622,16 @@ class LucidRuntime:
         name: str,
         args: dict[str, Any],
     ) -> None:
+        if name == "lucid.runtime.start":
+            ctx.mark_started()
+            return
         if name == "lucid.runtime.pause":
-            ctx.paused = True
+            if ctx.started:
+                ctx.paused = True
             return
         if name == "lucid.runtime.resume":
-            ctx.paused = False
+            if ctx.started:
+                ctx.paused = False
             return
         if name == "lucid.runtime.set_output_enabled":
             payload = _RuntimeOutputEnabled.model_validate(args)

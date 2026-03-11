@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react"
-import { LoaderCircle, Power, SendHorizonal } from "lucide-react"
+import { LoaderCircle, Play, Power, SendHorizonal } from "lucide-react"
 
-import { ConsoleRoom, type QueuedPrompt } from "@/components/console-room"
+import {
+  ConsoleRoom,
+  type QueuedPrompt,
+  type QueuedStart,
+} from "@/components/console-room"
 import type {
   WaypointControlState,
   WaypointHoldControl,
@@ -74,6 +78,12 @@ function hasPromptAction(capabilities: Capabilities | null) {
 function hasControlAction(capabilities: Capabilities | null) {
   return Boolean(
     capabilities?.manifest.actions.find((action) => action.name === "set_controls"),
+  )
+}
+
+function hasStartAction(capabilities: Capabilities | null) {
+  return Boolean(
+    capabilities?.manifest.actions.find((action) => action.name === "lucid.runtime.start"),
   )
 }
 
@@ -167,6 +177,14 @@ function buildDisplayStatus(args: {
     }
   }
 
+  if (session.state === "READY") {
+    return {
+      label: "READY",
+      detail: "Worker allocated. Send conditioning, then press Start.",
+      tone: "warm",
+    }
+  }
+
   if (trackReady) {
     return {
       label: "LIVE",
@@ -196,6 +214,7 @@ export function App() {
   const [sessionToken, setSessionToken] = useState<string | null>(null)
   const [prompt, setPrompt] = useState("")
   const [queuedPrompt, setQueuedPrompt] = useState<QueuedPrompt | null>(null)
+  const [queuedStart, setQueuedStart] = useState<QueuedStart | null>(null)
   const [selectedModel, setSelectedModel] = useState<DemoModelName>(demoEnv.defaultModel)
   const [waypointControls, setWaypointControls] =
     useState<WaypointControlState>(DEFAULT_WAYPOINT_CONTROLS)
@@ -204,6 +223,7 @@ export function App() {
   const [createPending, setCreatePending] = useState(false)
   const [endPending, setEndPending] = useState(false)
   const [promptPending, setPromptPending] = useState(false)
+  const [startPending, setStartPending] = useState(false)
   const [roomConnected, setRoomConnected] = useState(false)
   const [trackReady, setTrackReady] = useState(false)
 
@@ -214,10 +234,12 @@ export function App() {
   const resolvedModel =
     normalizeModelName(capabilities?.manifest.model.name) ?? selectedModel
   const promptSupported = hasPromptAction(capabilities)
+  const startSupported = hasStartAction(capabilities)
   const controlsSupported = hasControlAction(capabilities)
   const waypointModelActive = resolvedModel === "waypoint"
   const promptText = prompt.trim()
   const canSendPrompt = Boolean(hasActiveSession && promptSupported && promptText)
+  const canStartSession = Boolean(session?.state === "READY" && startSupported)
   const status = buildDisplayStatus({
     session,
     modelName: resolvedModel,
@@ -243,7 +265,9 @@ export function App() {
       setTrackReady(false)
       if (isTerminalSessionState(session?.state ?? "ENDED")) {
         setPromptPending(false)
+        setStartPending(false)
         setQueuedPrompt(null)
+        setQueuedStart(null)
       }
       return
     }
@@ -411,6 +435,13 @@ export function App() {
     })
   }
 
+  const queueStart = () => {
+    setStartPending(true)
+    setQueuedStart({
+      nonce: Date.now(),
+    })
+  }
+
   const handleCreateSession = async () => {
     if (missingConfig.length) {
       setRequestError(`Missing configuration: ${missingConfig.join(", ")}`)
@@ -421,6 +452,8 @@ export function App() {
     setRequestError(null)
     setRoomError(null)
     setPromptPending(false)
+    setStartPending(false)
+    setQueuedStart(null)
     setRoomConnected(false)
     setTrackReady(false)
 
@@ -483,6 +516,14 @@ export function App() {
     queuePrompt(promptText)
   }
 
+  const handleStart = () => {
+    if (!canStartSession) {
+      return
+    }
+    setRequestError(null)
+    queueStart()
+  }
+
   return (
     <main className="console-stage">
       <section
@@ -491,6 +532,19 @@ export function App() {
       >
         <div className="console-body">
           <div className="console-toolbar">
+            <button
+              type="button"
+              className="start-button"
+              onClick={handleStart}
+              disabled={!canStartSession || startPending || createPending || endPending}
+            >
+              {startPending ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              Start
+            </button>
             <button
               type="button"
               className={`power-button ${hasActiveSession ? "power-button-on" : ""}`}
@@ -518,6 +572,7 @@ export function App() {
                 token={sessionToken}
                 capabilities={capabilities}
                 queuedPrompt={queuedPrompt}
+                queuedStart={queuedStart}
                 controlState={waypointControls}
                 fallback={
                   <div className="screen-fallback">
@@ -532,8 +587,14 @@ export function App() {
                   setQueuedPrompt(null)
                   setRequestError(null)
                 }}
+                onStartSent={() => {
+                  setStartPending(false)
+                  setQueuedStart(null)
+                  setRequestError(null)
+                }}
                 onActionError={(message) => {
                   setPromptPending(false)
+                  setStartPending(false)
                   setRequestError(message)
                 }}
                 onRoomError={setRoomError}

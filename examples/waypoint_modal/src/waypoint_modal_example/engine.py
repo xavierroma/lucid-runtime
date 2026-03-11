@@ -10,7 +10,6 @@ from time import perf_counter
 from typing import Any
 
 import numpy as np
-from PIL import Image
 
 from .config import WaypointRuntimeConfig
 
@@ -331,6 +330,8 @@ class WaypointEngine:
     def _load_seed_image_from_path(path: Path, *, width: int, height: int) -> np.ndarray:
         if not path.exists():
             raise FileNotFoundError(f"waypoint seed image not found: {path}")
+        from PIL import Image
+
         image = Image.open(path).convert("RGB")
         if image.size != (width, height):
             image = image.resize((width, height), Image.Resampling.BILINEAR)

@@ -20,16 +20,22 @@ export interface QueuedPrompt {
   prompt: string
 }
 
+export interface QueuedStart {
+  nonce: number
+}
+
 interface ConsoleRoomProps {
   session: SessionRecord | null
   token: string | null
   capabilities: Capabilities | null
   queuedPrompt: QueuedPrompt | null
+  queuedStart: QueuedStart | null
   controlState: WaypointControlState
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
   onPromptSent: () => void
+  onStartSent: () => void
   onActionError: (message: string | null) => void
   onRoomError: (message: string | null) => void
 }
@@ -71,11 +77,13 @@ export function ConsoleRoom({
   token,
   capabilities,
   queuedPrompt,
+  queuedStart,
   controlState,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
   onPromptSent,
+  onStartSent,
   onActionError,
   onRoomError,
 }: ConsoleRoomProps) {
@@ -115,11 +123,13 @@ export function ConsoleRoom({
         session={session}
         capabilities={capabilities}
         queuedPrompt={queuedPrompt}
+        queuedStart={queuedStart}
         controlState={controlState}
         fallback={fallback}
         onConnectionChange={onConnectionChange}
         onTrackReadyChange={onTrackReadyChange}
         onPromptSent={onPromptSent}
+        onStartSent={onStartSent}
         onActionError={onActionError}
       />
     </LiveKitRoom>
@@ -130,11 +140,13 @@ interface ConsoleRoomContentProps {
   session: SessionRecord
   capabilities: Capabilities
   queuedPrompt: QueuedPrompt | null
+  queuedStart: QueuedStart | null
   controlState: WaypointControlState
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
   onPromptSent: () => void
+  onStartSent: () => void
   onActionError: (message: string | null) => void
 }
 
@@ -142,11 +154,13 @@ function ConsoleRoomContent({
   session,
   capabilities,
   queuedPrompt,
+  queuedStart,
   controlState,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
   onPromptSent,
+  onStartSent,
   onActionError,
 }: ConsoleRoomContentProps) {
   const room = useRoomContext()
@@ -155,6 +169,7 @@ function ConsoleRoomContent({
   const { send } = useDataChannel(capabilities.control_topic)
   const actionSeqRef = useRef(0)
   const lastPromptNonceRef = useRef<number | null>(null)
+  const lastStartNonceRef = useRef<number | null>(null)
   const lastControlSignatureRef = useRef<string | null>(null)
 
   const videoBinding = useMemo(
@@ -193,6 +208,7 @@ function ConsoleRoomContent({
   useEffect(() => {
     actionSeqRef.current = 0
     lastPromptNonceRef.current = null
+    lastStartNonceRef.current = null
     lastControlSignatureRef.current = null
   }, [session.session_id])
 
@@ -244,6 +260,58 @@ function ConsoleRoomContent({
     onActionError,
     onPromptSent,
     queuedPrompt,
+    send,
+    session.session_id,
+  ])
+
+  useEffect(() => {
+    if (!queuedStart) {
+      return
+    }
+    if (connectionState !== ConnectionState.Connected) {
+      return
+    }
+    if (lastStartNonceRef.current === queuedStart.nonce) {
+      return
+    }
+
+    let cancelled = false
+
+    const publishStart = async () => {
+      try {
+        onActionError(null)
+        await send(
+          encodeActionMessage({
+            name: "lucid.runtime.start",
+            args: {},
+            seq: actionSeqRef.current++,
+            sessionId: session.session_id,
+          }),
+          { reliable: true },
+        )
+        if (!cancelled) {
+          lastStartNonceRef.current = queuedStart.nonce
+          onStartSent()
+        }
+      } catch (error) {
+        if (!cancelled) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish start",
+          )
+        }
+      }
+    }
+
+    void publishStart()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionState,
+    onActionError,
+    onStartSent,
+    queuedStart,
     send,
     session.session_id,
   ])

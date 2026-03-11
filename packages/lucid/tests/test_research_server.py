@@ -73,7 +73,7 @@ def test_research_server_exposes_same_session_shape(worker_env: None) -> None:
         created = client.post("/sessions")
         assert created.status_code == 200
         created_payload = created.json()
-        assert created_payload["session"]["state"] in {"STARTING", "RUNNING"}
+        assert created_payload["session"]["state"] in {"STARTING", "READY", "RUNNING"}
         assert created_payload["client_access_token"]
         assert created_payload["capabilities"]["control_topic"] == "wm.control"
         session_id = created_payload["session"]["session_id"]

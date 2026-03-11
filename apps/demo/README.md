@@ -1,7 +1,7 @@
 # Demo App
 
 React + Vite frontend for creating a coordinator session, joining the returned LiveKit room,
-and sending Lucid control actions.
+conditioning a `READY` session, and sending Lucid control actions.
 
 ## Environment
 
@@ -29,6 +29,12 @@ or a gateway that handles CORS:
 bun install
 bun run dev
 ```
+
+## Session flow
+
+- Press power to allocate the worker and join the room.
+- Wait for `READY`, then send prompt or control actions to condition the initial generation.
+- Press `Start` to send `lucid.runtime.start` and transition the worker into `RUNNING`.
 
 ## Build
 
