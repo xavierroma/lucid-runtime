@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import importlib
 from pathlib import Path
 from typing import Any
 
@@ -11,25 +12,59 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 LUCID_SRC = ROOT / "packages" / "lucid" / "src"
 YUME_MODAL_EXAMPLE_SRC = ROOT / "examples" / "yume_modal" / "src"
+WAYPOINT_MODAL_EXAMPLE_SRC = ROOT / "examples" / "waypoint_modal" / "src"
 MANIFEST_PATH = ROOT / "packages" / "contracts" / "generated" / "lucid_manifest.json"
+WAYPOINT_MANIFEST_PATH = (
+    ROOT / "packages" / "contracts" / "generated" / "lucid_manifest.waypoint.json"
+)
 TS_PATH = ROOT / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.ts"
 
 
 def main() -> int:
-    sys.path.insert(0, str(YUME_MODAL_EXAMPLE_SRC))
     sys.path.insert(0, str(LUCID_SRC))
-    os.environ.setdefault("WM_MODEL_MODULE", "yume_modal_example.model")
-    from lucid.capabilities import manifest as load_manifest  # noqa: PLC0415
-
-    manifest = load_manifest()
+    yume_manifest = _load_manifest(
+        module_name="yume_modal_example.model",
+        extra_path=YUME_MODAL_EXAMPLE_SRC,
+    )
+    waypoint_manifest = _load_manifest(
+        module_name="waypoint_modal_example.model",
+        extra_path=WAYPOINT_MODAL_EXAMPLE_SRC,
+    )
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        json.dumps(yume_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    WAYPOINT_MANIFEST_PATH.write_text(
+        json.dumps(waypoint_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     TS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    TS_PATH.write_text(render_ts(manifest), encoding="utf-8")
+    TS_PATH.write_text(render_ts(yume_manifest), encoding="utf-8")
     return 0
+
+
+def _load_manifest(*, module_name: str, extra_path: Path) -> dict[str, Any]:
+    if str(extra_path) not in sys.path:
+        sys.path.insert(0, str(extra_path))
+
+    previous_model_module = os.environ.get("WM_MODEL_MODULE")
+    previous_model_name = os.environ.get("WM_MODEL_NAME")
+    os.environ["WM_MODEL_MODULE"] = module_name
+    os.environ["WM_MODEL_NAME"] = module_name.split(".", 1)[0].replace("_modal_example", "")
+    capabilities = importlib.import_module("lucid.capabilities")
+    try:
+        capabilities.ensure_model_module_loaded()
+        return capabilities.manifest()
+    finally:
+        if previous_model_module is None:
+            os.environ.pop("WM_MODEL_MODULE", None)
+        else:
+            os.environ["WM_MODEL_MODULE"] = previous_model_module
+        if previous_model_name is None:
+            os.environ.pop("WM_MODEL_NAME", None)
+        else:
+            os.environ["WM_MODEL_NAME"] = previous_model_name
 
 
 def render_ts(manifest: dict[str, Any]) -> str:

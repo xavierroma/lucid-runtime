@@ -38,6 +38,10 @@ class CoordinatorClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def mark_ready(self, session_id: str) -> None:
+        response = await self._client.post(f"/internal/sessions/{session_id}/ready")
+        self._raise_for_error(response)
+
     async def mark_running(self, session_id: str) -> None:
         response = await self._client.post(f"/internal/sessions/{session_id}/running")
         self._raise_for_error(response)

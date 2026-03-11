@@ -16,13 +16,14 @@ from pydantic import BaseModel
 from .capabilities import DEFAULT_CONTROL_TOPIC, DEFAULT_STATUS_TOPIC, capabilities
 from .config import ConfigError, RuntimeConfig
 from .discovery import ensure_model_module_loaded
-from .host import SessionRunner
+from .host import SessionLifecycleHooks, SessionRunner
 from .livekit import mint_access_token
 from .types import Assignment
 
 
 class SessionState(str, Enum):
     STARTING = "STARTING"
+    READY = "READY"
     RUNNING = "RUNNING"
     CANCELING = "CANCELING"
     ENDED = "ENDED"
@@ -66,6 +67,10 @@ class ResearchSessionService:
             None,
             logger,
             livekit_factory=livekit_factory,
+            lifecycle_hooks=SessionLifecycleHooks(
+                on_ready=self._mark_ready,
+                on_running=self._mark_running,
+            ),
         )
         self._active: _SessionTask | None = None
         self._lock = asyncio.Lock()
@@ -158,7 +163,6 @@ class ResearchSessionService:
             self._runner.stop()
 
     async def _run_session(self, record: SessionRecord, assignment: Assignment) -> None:
-        record.state = SessionState.RUNNING
         try:
             result = await self._runner.run_session(assignment)
             if result.error_code:
@@ -178,6 +182,22 @@ class ResearchSessionService:
             record.state = SessionState.FAILED
             record.error_code = "MODEL_RUNTIME_ERROR"
             record.end_reason = "WORKER_REPORTED_ERROR"
+
+    async def _mark_ready(self, session_id: str) -> None:
+        async with self._lock:
+            if self._active is None or self._active.record.session_id != session_id:
+                return
+            if self._active.record.state != SessionState.STARTING:
+                return
+            self._active.record.state = SessionState.READY
+
+    async def _mark_running(self, session_id: str) -> None:
+        async with self._lock:
+            if self._active is None or self._active.record.session_id != session_id:
+                return
+            if self._active.record.state not in {SessionState.STARTING, SessionState.READY}:
+                return
+            self._active.record.state = SessionState.RUNNING
 
 
 def create_app(service: ResearchSessionService) -> FastAPI:

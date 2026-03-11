@@ -102,6 +102,16 @@
         "properties": {},
         "type": "object"
       },
+      "description": "Begin model generation for the current session.",
+      "mode": "command",
+      "name": "lucid.runtime.start"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
       "description": "Pause model stepping for the current session.",
       "mode": "command",
       "name": "lucid.runtime.pause"

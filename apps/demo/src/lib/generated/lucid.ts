@@ -28,6 +28,16 @@ export const lucidManifest = {
         "properties": {},
         "type": "object"
       },
+      "description": "Begin model generation for the current session.",
+      "mode": "command",
+      "name": "lucid.runtime.start"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
       "description": "Pause model stepping for the current session.",
       "mode": "command",
       "name": "lucid.runtime.pause"
@@ -108,6 +118,8 @@ export const lucidManifest = {
 export interface SetPromptArgs {
   "prompt": string
 }
+export interface LucidRuntimeStartArgs {
+}
 export interface LucidRuntimePauseArgs {
 }
 export interface LucidRuntimeResumeArgs {
@@ -123,13 +135,14 @@ export interface LucidRuntimeSetOutputRateArgs {
 
 export interface ActionArgumentsByName {
   "set_prompt": SetPromptArgs
+  "lucid.runtime.start": LucidRuntimeStartArgs
   "lucid.runtime.pause": LucidRuntimePauseArgs
   "lucid.runtime.resume": LucidRuntimeResumeArgs
   "lucid.runtime.set_output_enabled": LucidRuntimeSetOutputEnabledArgs
   "lucid.runtime.set_output_rate": LucidRuntimeSetOutputRateArgs
 }
 
-export type ActionName = "set_prompt" | "lucid.runtime.pause" | "lucid.runtime.resume" | "lucid.runtime.set_output_enabled" | "lucid.runtime.set_output_rate"
+export type ActionName = "set_prompt" | "lucid.runtime.start" | "lucid.runtime.pause" | "lucid.runtime.resume" | "lucid.runtime.set_output_enabled" | "lucid.runtime.set_output_rate"
 
 export interface ActionEnvelope<TName extends ActionName = ActionName> {
   type: "action"

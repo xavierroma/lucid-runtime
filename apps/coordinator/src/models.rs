@@ -9,6 +9,7 @@ pub const STATUS_TOPIC: &str = "wm.status";
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SessionState {
     Starting,
+    Ready,
     Running,
     Canceling,
     Ended,

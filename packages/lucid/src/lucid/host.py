@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
@@ -22,6 +24,12 @@ from .runtime import LucidError, LucidRuntime
 from .types import Assignment, SessionResult
 
 
+@dataclass(frozen=True, slots=True)
+class SessionLifecycleHooks:
+    on_ready: Callable[[str], Any] | None = None
+    on_running: Callable[[str], Any] | None = None
+
+
 class SessionRunner:
     HEARTBEAT_INTERVAL_SECS = 2.0
 
@@ -34,6 +42,7 @@ class SessionRunner:
         runtime_config: Any | None = None,
         coordinator: CoordinatorClient | None = None,
         livekit_factory: Callable[[], LiveKitAdapter] | None = None,
+        lifecycle_hooks: SessionLifecycleHooks | None = None,
         runtime: LucidRuntime | None = None,
     ) -> None:
         ensure_model_module_loaded()
@@ -53,6 +62,7 @@ class SessionRunner:
             model_name=os.getenv("WM_MODEL_NAME", "").strip() or None,
         )
         self._livekit_factory = livekit_factory
+        self._lifecycle_hooks = lifecycle_hooks or SessionLifecycleHooks()
         self._session_stop_event = asyncio.Event()
         self._active_session_ctx = None
         self._loaded = False
@@ -138,13 +148,6 @@ class SessionRunner:
                 (perf_counter() - start) * 1000.0,
                 assignment.session_id,
             )
-            if self._coordinator is not None:
-                await self._coordinator.mark_running(assignment.session_id)
-                self._logger.info(
-                    "session_runner.run_session coordinator_marked_running elapsed_ms=%.1f session_id=%s",
-                    (perf_counter() - start) * 1000.0,
-                    assignment.session_id,
-                )
             await status.started(
                 self._session_config.worker_id
                 if self._session_config is not None
@@ -152,6 +155,22 @@ class SessionRunner:
             )
             self._logger.info(
                 "session_runner.run_session status_published elapsed_ms=%.1f session_id=%s",
+                (perf_counter() - start) * 1000.0,
+                assignment.session_id,
+            )
+            if self._coordinator is not None:
+                await self._coordinator.mark_ready(assignment.session_id)
+                self._logger.info(
+                    "session_runner.run_session coordinator_marked_ready elapsed_ms=%.1f session_id=%s",
+                    (perf_counter() - start) * 1000.0,
+                    assignment.session_id,
+                )
+            await self._emit_lifecycle_hook(
+                self._lifecycle_hooks.on_ready,
+                assignment.session_id,
+            )
+            self._logger.info(
+                "session_runner.run_session ready_for_start elapsed_ms=%.1f session_id=%s",
                 (perf_counter() - start) * 1000.0,
                 assignment.session_id,
             )
@@ -338,8 +357,29 @@ class SessionRunner:
                 await status.pong(outcome.pong_payload)
 
     async def _model_loop(self, *, session_ctx) -> None:
+        await session_ctx.wait_until_started()
+        if not session_ctx.running:
+            self._session_stop_event.set()
+            return
+        if self._coordinator is not None:
+            await self._coordinator.mark_running(session_ctx.session_id)
+        await self._emit_lifecycle_hook(
+            self._lifecycle_hooks.on_running,
+            session_ctx.session_id,
+        )
         await self._runtime.model.start_session(session_ctx)
         self._session_stop_event.set()
+
+    @staticmethod
+    async def _emit_lifecycle_hook(
+        hook: Callable[[str], Any] | None,
+        session_id: str,
+    ) -> None:
+        if hook is None:
+            return
+        result = hook(session_id)
+        if inspect.isawaitable(result):
+            await result
 
     async def _metrics_loop(
         self,

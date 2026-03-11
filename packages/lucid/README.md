@@ -14,4 +14,8 @@ Python runtime library for declaring realtime world models with:
 
 The library lives here. Example model ports live under `examples/`.
 
+Runtime-managed sessions follow `STARTING -> READY -> RUNNING`.
+Workers enter `READY` after allocation/load/connect, and only begin generation after
+`lucid.runtime.start`.
+
 The installable distribution name is `lucid-runtime`; model code imports `lucid`.

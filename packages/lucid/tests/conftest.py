@@ -8,3 +8,4 @@ EXAMPLE_SRC = Path(__file__).resolve().parents[3] / "examples" / "yume_modal" / 
 if str(EXAMPLE_SRC) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_SRC))
 os.environ.setdefault("WM_MODEL_MODULE", "yume_modal_example.model")
+os.environ.setdefault("WM_MODEL_NAME", "yume")
