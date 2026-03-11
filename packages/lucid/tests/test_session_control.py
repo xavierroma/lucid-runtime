@@ -93,3 +93,26 @@ async def test_session_control_dispatches_state_action(worker_env: None) -> None
     )
 
     assert session_ctx.state.set_prompt.prompt == "new prompt"
+
+
+@pytest.mark.asyncio
+async def test_session_control_ignores_invalid_action_args(worker_env: None) -> None:
+    runtime = LucidRuntime.load_selected(
+        runtime_config=RuntimeConfig.from_env(),
+        logger=logging.getLogger("tests.session_control"),
+    )
+    session_ctx = runtime.create_session_context(
+        session_id="s1",
+        room_name="wm-s1",
+        publish_fn=_noop_publish,
+    )
+    control = SessionControlReducer(runtime, session_ctx, logging.getLogger("tests.session_control"))
+
+    outcome = await control.reduce(
+        b'{"type":"action","seq":1,"ts_ms":10,"session_id":"s1","payload":{"name":"set_prompt","args":{}}}',
+        session_id="s1",
+    )
+
+    assert outcome.stop_requested is False
+    assert outcome.pong_payload is None
+    assert session_ctx.state.get("set_prompt") is None

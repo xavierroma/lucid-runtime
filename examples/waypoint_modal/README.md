@@ -24,7 +24,9 @@ That is the part you rewrite when you port a new model into Lucid.
 The example exposes:
 
 - `set_prompt`: persistent text conditioning
-- `set_controls`: persistent held buttons plus mouse velocity and scroll input
+- `set_buttons`: persistent held Owl-Control / Windows virtual-key button IDs
+- `mouse_move`: transient relative look deltas applied to the next frame
+- `scroll`: transient relative scroll wheel input applied to the next frame
 - `main_video`: the generated RGB video stream
 
 The default output size is `640x360`, which matches the current Waypoint 1.x legacy-model path used by Overworld's Biome server.
@@ -88,9 +90,9 @@ cargo run -p coordinator
 cd apps/demo && bun run dev
 ```
 
-The demo renders the Lucid manifest and exposes the generated `main_video` output. For richer controls, send `set_controls` actions from your own client or a keyboard/mouse adapter.
+The demo renders the Lucid manifest, exposes the generated `main_video` output, and now mounts a Waypoint control deck that emits upstream-style button, mouse, and scroll actions.
 
-Example `set_controls` control message:
+Example `set_buttons` control message:
 
 ```json
 {
@@ -99,12 +101,44 @@ Example `set_controls` control message:
   "ts_ms": 1741315200000,
   "session_id": "3acb0b65-7b3c-4ebb-8e98-9e18dbf7403f",
   "payload": {
-    "name": "set_controls",
+    "name": "set_buttons",
     "args": {
-      "forward": true,
-      "mouse_x": 0.18,
-      "mouse_y": -0.04,
-      "scroll_wheel": 0
+      "buttons": [87, 160]
+    }
+  }
+}
+```
+
+Example `mouse_move` control message:
+
+```json
+{
+  "type": "action",
+  "seq": 2,
+  "ts_ms": 1741315200100,
+  "session_id": "3acb0b65-7b3c-4ebb-8e98-9e18dbf7403f",
+  "payload": {
+    "name": "mouse_move",
+    "args": {
+      "dx": 14,
+      "dy": -6
+    }
+  }
+}
+```
+
+Example `scroll` control message:
+
+```json
+{
+  "type": "action",
+  "seq": 3,
+  "ts_ms": 1741315200200,
+  "session_id": "3acb0b65-7b3c-4ebb-8e98-9e18dbf7403f",
+  "payload": {
+    "name": "scroll",
+    "args": {
+      "amount": 120
     }
   }
 }

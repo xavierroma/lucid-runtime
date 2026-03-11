@@ -36,24 +36,6 @@ interface WaypointControlsProps {
   onScrollNudge: (direction: -1 | 1) => void
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value))
-}
-
-function normalizeLook(
-  clientX: number,
-  clientY: number,
-  element: HTMLDivElement,
-): { mouseX: number; mouseY: number } {
-  const rect = element.getBoundingClientRect()
-  const mouseX = clamp(((clientX - rect.left) / rect.width) * 2 - 1, -1, 1)
-  const mouseY = clamp(((clientY - rect.top) / rect.height) * 2 - 1, -1, 1)
-  return {
-    mouseX,
-    mouseY,
-  }
-}
-
 interface HoldButtonProps {
   label: string
   icon?: React.ReactNode
@@ -111,6 +93,7 @@ export function WaypointControls({
   onScrollNudge,
 }: WaypointControlsProps) {
   const lookPadRef = useRef<HTMLDivElement | null>(null)
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null)
 
   return (
     <section
@@ -194,24 +177,57 @@ export function WaypointControls({
           className="look-pad"
           aria-label="Look pad"
           onContextMenu={(event) => event.preventDefault()}
+          onWheel={(event) => {
+            if (disabled || event.deltaY === 0) {
+              return
+            }
+            event.preventDefault()
+            onScrollNudge(event.deltaY < 0 ? 1 : -1)
+          }}
           onPointerDown={(event) => {
             if (disabled || !lookPadRef.current) {
               return
             }
             event.preventDefault()
             event.currentTarget.setPointerCapture(event.pointerId)
-            const next = normalizeLook(event.clientX, event.clientY, lookPadRef.current)
-            onLookChange(next.mouseX, next.mouseY)
+            lastPointerRef.current = {
+              x: event.clientX,
+              y: event.clientY,
+            }
           }}
           onPointerMove={(event) => {
             if (disabled || !lookPadRef.current || event.buttons === 0) {
               return
             }
-            const next = normalizeLook(event.clientX, event.clientY, lookPadRef.current)
-            onLookChange(next.mouseX, next.mouseY)
+            const lastPointer = lastPointerRef.current
+            lastPointerRef.current = {
+              x: event.clientX,
+              y: event.clientY,
+            }
+            if (!lastPointer) {
+              return
+            }
+            const deltaX = event.clientX - lastPointer.x
+            const deltaY = event.clientY - lastPointer.y
+            if (deltaX === 0 && deltaY === 0) {
+              return
+            }
+            onLookChange(deltaX, deltaY)
           }}
-          onPointerUp={() => onLookReset()}
-          onPointerCancel={() => onLookReset()}
+          onPointerUp={() => {
+            lastPointerRef.current = null
+            onLookReset()
+          }}
+          onPointerCancel={() => {
+            lastPointerRef.current = null
+            onLookReset()
+          }}
+          onPointerLeave={(event) => {
+            if (event.buttons === 0) {
+              lastPointerRef.current = null
+              onLookReset()
+            }
+          }}
         >
           <div className="look-pad-grid" aria-hidden="true" />
           <div className="look-pad-label">

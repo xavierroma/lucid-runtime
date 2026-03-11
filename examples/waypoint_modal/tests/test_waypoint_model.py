@@ -6,7 +6,7 @@ import sys
 import types
 
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 import pytest
 
 from lucid import SessionContext
@@ -20,11 +20,8 @@ class _PromptState(BaseModel):
     prompt: str
 
 
-class _ControlsState(BaseModel):
-    forward: bool = False
-    mouse_x: float = 0.0
-    mouse_y: float = 0.0
-    scroll_wheel: int = 0
+class _ButtonsState(BaseModel):
+    buttons: list[int] = Field(default_factory=list)
 
 
 class _StubEngine:
@@ -82,8 +79,15 @@ def _build_model(engine: _StubEngine) -> WaypointLucidModel:
     return model
 
 
+def test_waypoint_manifest_exposes_parity_actions() -> None:
+    manifest = WaypointLucidModel._lucid_definition.to_manifest()
+    action_names = {action["name"] for action in manifest["actions"]}
+
+    assert {"set_prompt", "set_buttons", "mouse_move", "scroll"}.issubset(action_names)
+
+
 @pytest.mark.asyncio
-async def test_start_session_updates_prompt_and_controls() -> None:
+async def test_start_session_persists_buttons_and_drains_transient_inputs() -> None:
     published: list[np.ndarray] = []
     ctx: SessionContext | None = None
     engine = _StubEngine()
@@ -95,11 +99,16 @@ async def test_start_session_updates_prompt_and_controls() -> None:
         if len(published) == 1:
             ctx.state.set("set_prompt", _PromptState(prompt="new prompt"))
             ctx.state.set(
-                "set_controls",
-                _ControlsState(forward=True, mouse_x=0.25, mouse_y=-0.5, scroll_wheel=1),
+                "set_buttons",
+                _ButtonsState(buttons=[0x57]),
             )
+            await model.mouse_move(ctx, dx=10, dy=-4)
+            await model.mouse_move(ctx, dx=5, dy=1)
+            await model.scroll(ctx, amount=120)
+            await model.scroll(ctx, amount=120)
             return
-        ctx.running = False
+        if len(published) == 3:
+            ctx.running = False
 
     ctx = SessionContext(
         session_id="s1",
@@ -111,16 +120,36 @@ async def test_start_session_updates_prompt_and_controls() -> None:
 
     await asyncio.wait_for(model.start_session(ctx), timeout=1.0)
 
-    assert [int(frame[0, 0, 0]) for frame in published] == [10, 200]
+    assert [int(frame[0, 0, 0]) for frame in published] == [10, 200, 200]
     assert engine.start_prompts == ["old prompt"]
     assert engine.updated_prompts == ["new prompt"]
     assert engine.controls[0] == WaypointControlState()
     assert engine.controls[1] == WaypointControlState(
-        forward=True,
-        mouse_x=0.25,
-        mouse_y=-0.5,
-        scroll_wheel=1,
+        buttons=frozenset({0x57}),
+        mouse_dx=15,
+        mouse_dy=-3,
+        scroll_amount=240,
     )
+    assert engine.controls[2] == WaypointControlState(
+        buttons=frozenset({0x57}),
+        mouse_dx=0.0,
+        mouse_dy=0.0,
+        scroll_amount=0,
+    )
+
+
+def test_set_buttons_rejects_invalid_button_ids() -> None:
+    action_definition = next(
+        action
+        for action in WaypointLucidModel._lucid_definition.actions
+        if action.name == "set_buttons"
+    )
+
+    with pytest.raises(ValidationError):
+        action_definition.arg_model.model_validate({"buttons": [-1]})
+
+    with pytest.raises(ValidationError):
+        action_definition.arg_model.model_validate({"buttons": [256]})
 
 
 @pytest.mark.asyncio

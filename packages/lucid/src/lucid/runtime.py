@@ -14,7 +14,7 @@ from time import perf_counter
 from typing import Any, get_type_hints
 
 import numpy as np
-from pydantic import BaseModel, Field, TypeAdapter, create_model
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError, create_model
 import yaml
 
 from .publish import OutputSpec
@@ -607,7 +607,10 @@ class LucidRuntime:
         if name not in self._actions:
             raise ActionDispatchError(f"unknown action: {name}")
         definition = self._actions[name]
-        validated = definition.arg_model.model_validate(args)
+        try:
+            validated = definition.arg_model.model_validate(args)
+        except ValidationError as exc:
+            raise ActionDispatchError(f"invalid action args for {name}: {exc}") from exc
         if definition.mode == "state":
             ctx.state.set(name, validated)
         handler = getattr(self.model, definition.handler_name)
@@ -634,11 +637,17 @@ class LucidRuntime:
                 ctx.paused = False
             return
         if name == "lucid.runtime.set_output_enabled":
-            payload = _RuntimeOutputEnabled.model_validate(args)
+            try:
+                payload = _RuntimeOutputEnabled.model_validate(args)
+            except ValidationError as exc:
+                raise ActionDispatchError(f"invalid action args for {name}: {exc}") from exc
             ctx.set_output_enabled(payload.output, payload.enabled)
             return
         if name == "lucid.runtime.set_output_rate":
-            payload = _RuntimeOutputRate.model_validate(args)
+            try:
+                payload = _RuntimeOutputRate.model_validate(args)
+            except ValidationError as exc:
+                raise ActionDispatchError(f"invalid action args for {name}: {exc}") from exc
             ctx.set_output_rate(payload.output, payload.max_rate_hz)
             return
         raise ActionDispatchError(f"unknown runtime action: {name}")
