@@ -13,29 +13,35 @@ import type { TrackReference } from "@livekit/components-react"
 
 import { demoEnv } from "@/lib/env"
 import type { Capabilities, SessionRecord } from "@/lib/coordinator"
-import type { WaypointControlState } from "@/components/waypoint-controls"
 
-export interface QueuedPrompt {
+export interface QueuedLaunch {
   nonce: number
-  prompt: string
+  prompt: string | null
 }
 
-export interface QueuedStart {
+export interface QueuedMouseMove {
   nonce: number
+  dx: number
+  dy: number
+}
+
+export interface QueuedScroll {
+  nonce: number
+  amount: number
 }
 
 interface ConsoleRoomProps {
   session: SessionRecord | null
   token: string | null
   capabilities: Capabilities | null
-  queuedPrompt: QueuedPrompt | null
-  queuedStart: QueuedStart | null
-  controlState: WaypointControlState
+  queuedLaunch: QueuedLaunch | null
+  pressedButtonIds: number[]
+  queuedMouseMove: QueuedMouseMove | null
+  queuedScroll: QueuedScroll | null
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
-  onPromptSent: () => void
-  onStartSent: () => void
+  onLaunchSent: () => void
   onActionError: (message: string | null) => void
   onRoomError: (message: string | null) => void
 }
@@ -76,14 +82,14 @@ export function ConsoleRoom({
   session,
   token,
   capabilities,
-  queuedPrompt,
-  queuedStart,
-  controlState,
+  queuedLaunch,
+  pressedButtonIds,
+  queuedMouseMove,
+  queuedScroll,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
-  onPromptSent,
-  onStartSent,
+  onLaunchSent,
   onActionError,
   onRoomError,
 }: ConsoleRoomProps) {
@@ -122,14 +128,14 @@ export function ConsoleRoom({
       <ConsoleRoomContent
         session={session}
         capabilities={capabilities}
-        queuedPrompt={queuedPrompt}
-        queuedStart={queuedStart}
-        controlState={controlState}
+        queuedLaunch={queuedLaunch}
+        pressedButtonIds={pressedButtonIds}
+        queuedMouseMove={queuedMouseMove}
+        queuedScroll={queuedScroll}
         fallback={fallback}
         onConnectionChange={onConnectionChange}
         onTrackReadyChange={onTrackReadyChange}
-        onPromptSent={onPromptSent}
-        onStartSent={onStartSent}
+        onLaunchSent={onLaunchSent}
         onActionError={onActionError}
       />
     </LiveKitRoom>
@@ -139,28 +145,28 @@ export function ConsoleRoom({
 interface ConsoleRoomContentProps {
   session: SessionRecord
   capabilities: Capabilities
-  queuedPrompt: QueuedPrompt | null
-  queuedStart: QueuedStart | null
-  controlState: WaypointControlState
+  queuedLaunch: QueuedLaunch | null
+  pressedButtonIds: number[]
+  queuedMouseMove: QueuedMouseMove | null
+  queuedScroll: QueuedScroll | null
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
-  onPromptSent: () => void
-  onStartSent: () => void
+  onLaunchSent: () => void
   onActionError: (message: string | null) => void
 }
 
 function ConsoleRoomContent({
   session,
   capabilities,
-  queuedPrompt,
-  queuedStart,
-  controlState,
+  queuedLaunch,
+  pressedButtonIds,
+  queuedMouseMove,
+  queuedScroll,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
-  onPromptSent,
-  onStartSent,
+  onLaunchSent,
   onActionError,
 }: ConsoleRoomContentProps) {
   const room = useRoomContext()
@@ -168,18 +174,33 @@ function ConsoleRoomContent({
   const cameraTracks = useTracks([Track.Source.Camera]) as TrackReference[]
   const { send } = useDataChannel(capabilities.control_topic)
   const actionSeqRef = useRef(0)
-  const lastPromptNonceRef = useRef<number | null>(null)
-  const lastStartNonceRef = useRef<number | null>(null)
-  const lastControlSignatureRef = useRef<string | null>(null)
+  const lastLaunchNonceRef = useRef<number | null>(null)
+  const lastButtonsSignatureRef = useRef<string | null>(null)
+  const lastMouseMoveNonceRef = useRef<number | null>(null)
+  const lastScrollNonceRef = useRef<number | null>(null)
 
   const videoBinding = useMemo(
     () => capabilities.output_bindings.find((binding) => binding.kind === "video"),
     [capabilities.output_bindings],
   )
-  const supportsControlState = useMemo(
-    () => capabilities.manifest.actions.some((action) => action.name === "set_controls"),
+  const supportsButtonState = useMemo(
+    () => capabilities.manifest.actions.some((action) => action.name === "set_buttons"),
     [capabilities.manifest.actions],
   )
+  const supportsMouseMove = useMemo(
+    () => capabilities.manifest.actions.some((action) => action.name === "mouse_move"),
+    [capabilities.manifest.actions],
+  )
+  const supportsScroll = useMemo(
+    () => capabilities.manifest.actions.some((action) => action.name === "scroll"),
+    [capabilities.manifest.actions],
+  )
+  const supportsPromptState = useMemo(
+    () => capabilities.manifest.actions.some((action) => action.name === "set_prompt"),
+    [capabilities.manifest.actions],
+  )
+  const sessionAcceptsControlMessages =
+    session.state === "READY" || session.state === "RUNNING"
 
   const remoteTrack = useMemo(() => {
     const preferredTrack = cameraTracks.find(
@@ -207,79 +228,44 @@ function ConsoleRoomContent({
 
   useEffect(() => {
     actionSeqRef.current = 0
-    lastPromptNonceRef.current = null
-    lastStartNonceRef.current = null
-    lastControlSignatureRef.current = null
+    lastLaunchNonceRef.current = null
+    lastButtonsSignatureRef.current = null
+    lastMouseMoveNonceRef.current = null
+    lastScrollNonceRef.current = null
   }, [session.session_id])
 
   useEffect(() => {
-    if (!queuedPrompt) {
+    if (!queuedLaunch) {
       return
     }
     if (connectionState !== ConnectionState.Connected) {
       return
     }
-    if (lastPromptNonceRef.current === queuedPrompt.nonce) {
+    if (session.state !== "READY") {
+      return
+    }
+    if (lastLaunchNonceRef.current === queuedLaunch.nonce) {
       return
     }
 
     let cancelled = false
 
-    const publishPrompt = async () => {
+    const publishLaunch = async () => {
       try {
         onActionError(null)
-        await send(
-          encodeActionMessage({
-            name: "set_prompt",
-            args: { prompt: queuedPrompt.prompt },
-            seq: actionSeqRef.current++,
-            sessionId: session.session_id,
-          }),
-          { reliable: true },
-        )
-        if (!cancelled) {
-          lastPromptNonceRef.current = queuedPrompt.nonce
-          onPromptSent()
-        }
-      } catch (error) {
-        if (!cancelled) {
-          onActionError(
-            error instanceof Error ? error.message : "failed to publish prompt",
+
+        if (queuedLaunch.prompt && supportsPromptState) {
+          await send(
+            encodeActionMessage({
+              name: "set_prompt",
+              args: { prompt: queuedLaunch.prompt },
+              seq: actionSeqRef.current++,
+              sessionId: session.session_id,
+            }),
+            { reliable: true },
           )
         }
-      }
-    }
 
-    void publishPrompt()
-
-    return () => {
-      cancelled = true
-    }
-  }, [
-    connectionState,
-    onActionError,
-    onPromptSent,
-    queuedPrompt,
-    send,
-    session.session_id,
-  ])
-
-  useEffect(() => {
-    if (!queuedStart) {
-      return
-    }
-    if (connectionState !== ConnectionState.Connected) {
-      return
-    }
-    if (lastStartNonceRef.current === queuedStart.nonce) {
-      return
-    }
-
-    let cancelled = false
-
-    const publishStart = async () => {
-      try {
-        onActionError(null)
         await send(
           encodeActionMessage({
             name: "lucid.runtime.start",
@@ -290,19 +276,19 @@ function ConsoleRoomContent({
           { reliable: true },
         )
         if (!cancelled) {
-          lastStartNonceRef.current = queuedStart.nonce
-          onStartSent()
+          lastLaunchNonceRef.current = queuedLaunch.nonce
+          onLaunchSent()
         }
       } catch (error) {
         if (!cancelled) {
           onActionError(
-            error instanceof Error ? error.message : "failed to publish start",
+            error instanceof Error ? error.message : "failed to publish launch",
           )
         }
       }
     }
 
-    void publishStart()
+    void publishLaunch()
 
     return () => {
       cancelled = true
@@ -310,46 +296,40 @@ function ConsoleRoomContent({
   }, [
     connectionState,
     onActionError,
-    onStartSent,
-    queuedStart,
+    onLaunchSent,
+    queuedLaunch,
     send,
+    session.state,
     session.session_id,
+    supportsPromptState,
   ])
 
   useEffect(() => {
-    if (!supportsControlState) {
+    if (!supportsButtonState) {
       return
     }
     if (connectionState !== ConnectionState.Connected) {
       return
     }
+    if (!sessionAcceptsControlMessages) {
+      return
+    }
 
-    const signature = JSON.stringify(controlState)
-    if (lastControlSignatureRef.current === signature) {
+    const signature = JSON.stringify(pressedButtonIds)
+    if (lastButtonsSignatureRef.current === signature) {
       return
     }
 
     let cancelled = false
 
-    const publishControls = async () => {
+    const publishButtons = async () => {
       try {
         onActionError(null)
         await send(
           encodeActionMessage({
-            name: "set_controls",
+            name: "set_buttons",
             args: {
-              forward: controlState.forward,
-              backward: controlState.backward,
-              left: controlState.left,
-              right: controlState.right,
-              jump: controlState.jump,
-              sprint: controlState.sprint,
-              crouch: controlState.crouch,
-              primary_fire: controlState.primary_fire,
-              secondary_fire: controlState.secondary_fire,
-              mouse_x: controlState.mouse_x,
-              mouse_y: controlState.mouse_y,
-              scroll_wheel: controlState.scroll_wheel,
+              buttons: pressedButtonIds,
             },
             seq: actionSeqRef.current++,
             sessionId: session.session_id,
@@ -357,29 +337,154 @@ function ConsoleRoomContent({
           { reliable: true },
         )
         if (!cancelled) {
-          lastControlSignatureRef.current = signature
+          lastButtonsSignatureRef.current = signature
         }
       } catch (error) {
         if (!cancelled) {
           onActionError(
-            error instanceof Error ? error.message : "failed to publish controls",
+            error instanceof Error ? error.message : "failed to publish button state",
           )
         }
       }
     }
 
-    void publishControls()
+    void publishButtons()
 
     return () => {
       cancelled = true
     }
   }, [
     connectionState,
-    controlState,
     onActionError,
+    pressedButtonIds,
     send,
+    session.state,
     session.session_id,
-    supportsControlState,
+    sessionAcceptsControlMessages,
+    supportsButtonState,
+  ])
+
+  useEffect(() => {
+    if (!queuedMouseMove) {
+      return
+    }
+    if (!supportsMouseMove) {
+      return
+    }
+    if (connectionState !== ConnectionState.Connected) {
+      return
+    }
+    if (!sessionAcceptsControlMessages) {
+      return
+    }
+    if (lastMouseMoveNonceRef.current === queuedMouseMove.nonce) {
+      return
+    }
+
+    let cancelled = false
+
+    const publishMouseMove = async () => {
+      try {
+        onActionError(null)
+        await send(
+          encodeActionMessage({
+            name: "mouse_move",
+            args: {
+              dx: queuedMouseMove.dx,
+              dy: queuedMouseMove.dy,
+            },
+            seq: actionSeqRef.current++,
+            sessionId: session.session_id,
+          }),
+          { reliable: false },
+        )
+        if (!cancelled) {
+          lastMouseMoveNonceRef.current = queuedMouseMove.nonce
+        }
+      } catch (error) {
+        if (!cancelled) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish mouse movement",
+          )
+        }
+      }
+    }
+
+    void publishMouseMove()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionState,
+    onActionError,
+    queuedMouseMove,
+    send,
+    session.state,
+    session.session_id,
+    sessionAcceptsControlMessages,
+    supportsMouseMove,
+  ])
+
+  useEffect(() => {
+    if (!queuedScroll) {
+      return
+    }
+    if (!supportsScroll) {
+      return
+    }
+    if (connectionState !== ConnectionState.Connected) {
+      return
+    }
+    if (!sessionAcceptsControlMessages) {
+      return
+    }
+    if (lastScrollNonceRef.current === queuedScroll.nonce) {
+      return
+    }
+
+    let cancelled = false
+
+    const publishScroll = async () => {
+      try {
+        onActionError(null)
+        await send(
+          encodeActionMessage({
+            name: "scroll",
+            args: {
+              amount: queuedScroll.amount,
+            },
+            seq: actionSeqRef.current++,
+            sessionId: session.session_id,
+          }),
+          { reliable: false },
+        )
+        if (!cancelled) {
+          lastScrollNonceRef.current = queuedScroll.nonce
+        }
+      } catch (error) {
+        if (!cancelled) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish scroll input",
+          )
+        }
+      }
+    }
+
+    void publishScroll()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionState,
+    onActionError,
+    queuedScroll,
+    send,
+    session.state,
+    session.session_id,
+    sessionAcceptsControlMessages,
+    supportsScroll,
   ])
 
   if (!remoteTrack) {

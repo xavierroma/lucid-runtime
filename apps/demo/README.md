@@ -1,7 +1,7 @@
 # Demo App
 
 React + Vite frontend for creating a coordinator session, joining the returned LiveKit room,
-conditioning a `READY` session, and sending Lucid control actions.
+authoring saved world environments, and sending Lucid control actions.
 
 ## Environment
 
@@ -30,11 +30,21 @@ bun install
 bun run dev
 ```
 
+## Environment flow
+
+- Open `/environments` in the demo to create saved world environments backed by browser
+  `localStorage`.
+- Each environment currently stores a name plus a text prompt.
+- Return to the main console and choose one saved environment before starting a session.
+
 ## Session flow
 
 - Press power to allocate the worker and join the room.
-- Wait for `READY`, then send prompt or control actions to condition the initial generation.
-- Press `Start` to send `lucid.runtime.start` and transition the worker into `RUNNING`.
+- Wait for `READY`, then choose the environment you want to launch.
+- Press `Start`; the demo sends `set_prompt` with the selected environment prompt first, then
+  sends `lucid.runtime.start`.
+- When Waypoint is active, the demo mounts a control deck that publishes persistent `set_buttons`
+  state plus transient `mouse_move` and `scroll` actions after the room connects.
 
 ## Build
 
