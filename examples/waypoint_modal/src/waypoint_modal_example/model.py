@@ -31,6 +31,7 @@ class WaypointLucidModel(VideoModel):
     def __init__(self, config: dict[str, object]) -> None:
         super().__init__(config)
         self._engine: WaypointEngine | None = None
+        self._compiler_cache_committed = False
 
     def resolve_outputs(self, outputs):
         runtime_config = self.runtime_config
@@ -67,6 +68,12 @@ class WaypointLucidModel(VideoModel):
                 exc.__class__.__name__,
             )
             raise
+        if self.runtime_config.waypoint_warmup_on_load:
+            self._compiler_cache_committed = await asyncio.to_thread(
+                _commit_compiler_cache_volume,
+                self.logger,
+                "post_warmup",
+            )
         self.logger.info(
             "waypoint.model.load complete duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s",
             (perf_counter() - start) * 1000.0,
@@ -189,6 +196,12 @@ class WaypointLucidModel(VideoModel):
                         (perf_counter() - start) * 1000.0,
                         ctx.session_id,
                     )
+                    if not self._compiler_cache_committed:
+                        self._compiler_cache_committed = await asyncio.to_thread(
+                            _commit_compiler_cache_volume,
+                            ctx.logger,
+                            "first_frame",
+                        )
 
                 elapsed_s = asyncio.get_running_loop().time() - loop_start_s
                 if elapsed_s < target_interval_s:
@@ -218,7 +231,9 @@ class WaypointLucidModel(VideoModel):
         finally:
             logger = self.logger or ctx.logger
             if logger is not None:
-                await asyncio.to_thread(_commit_compiler_cache_volume, logger)
+                self._compiler_cache_committed = (
+                    await asyncio.to_thread(_commit_compiler_cache_volume, logger, "session_end")
+                ) or self._compiler_cache_committed
 
 
 def _resolve_prompt(ctx: SessionContext, default_prompt: str) -> str:
@@ -249,30 +264,33 @@ def _resolve_controls(ctx: SessionContext) -> WaypointControlState:
     )
 
 
-def _commit_compiler_cache_volume(logger) -> None:
+def _commit_compiler_cache_volume(logger, reason: str = "session_end") -> bool:
     volume_name = os.getenv("MODAL_HF_CACHE_VOLUME", "").strip()
     cache_root = os.getenv("MODAL_COMPILER_CACHE_ROOT", "").strip()
     if not volume_name or not cache_root or not Path(cache_root).exists():
-        return
+        return False
 
     try:
         import modal
     except Exception:
-        return
+        return False
 
     try:
         modal.Volume.from_name(volume_name).commit()
     except Exception as exc:
         logger.warning(
-            "waypoint.model.end_session compiler_cache_commit_failed volume=%s root=%s error_type=%s",
+            "waypoint.model.compiler_cache_commit_failed volume=%s root=%s reason=%s error_type=%s",
             volume_name,
             cache_root,
+            reason,
             exc.__class__.__name__,
         )
-        return
+        return False
 
     logger.info(
-        "waypoint.model.end_session compiler_cache_committed volume=%s root=%s",
+        "waypoint.model.compiler_cache_committed volume=%s root=%s reason=%s",
         volume_name,
         cache_root,
+        reason,
     )
+    return True

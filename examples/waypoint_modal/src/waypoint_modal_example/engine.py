@@ -49,6 +49,7 @@ class WaypointEngine:
         self._engine: Any | None = None
         self._ctrl_cls: Any | None = None
         self._seed_frame: np.ndarray | None = None
+        self._last_frame: np.ndarray | None = None
         self._current_prompt = runtime_config.waypoint_default_prompt
 
     async def load(self) -> None:
@@ -241,14 +242,19 @@ class WaypointEngine:
             )
         raise RuntimeError(f"failed to load waypoint model from {model_source}") from last_error
 
-    def _reset_session_sync(self, prompt: str) -> None:
+    def _reset_session_sync(self, prompt: str, seed_frame: np.ndarray | None = None) -> None:
         engine = self._require_engine()
-        seed_frame = self._require_seed_frame()
+        seed_frame = (
+            np.ascontiguousarray(seed_frame)
+            if seed_frame is not None
+            else self._require_seed_frame()
+        )
         import torch
 
         engine.reset()
         seed_tensor = torch.from_numpy(seed_frame).to(device="cuda", dtype=torch.uint8)
         engine.append_frame(seed_tensor)
+        self._last_frame = seed_frame
         self._current_prompt = prompt
         if getattr(engine.model_cfg, "prompt_conditioning", None) is not None:
             engine.set_prompt(prompt)
@@ -265,6 +271,7 @@ class WaypointEngine:
         import torch
 
         engine = self._require_engine()
+        self._roll_session_if_needed_sync()
         ctrl = self._build_ctrl_input(controls)
         frame = engine.gen_frame(ctrl=ctrl)
         if frame.dtype != torch.uint8:
@@ -279,7 +286,9 @@ class WaypointEngine:
             raise RuntimeError(
                 f"waypoint frame shape mismatch: expected {expected_shape}, got {tuple(frame.shape)}"
             )
-        return np.ascontiguousarray(frame.cpu().numpy())
+        frame_np = np.ascontiguousarray(frame.cpu().numpy())
+        self._last_frame = frame_np
+        return frame_np
 
     def _warmup_sync(self, prompt: str) -> None:
         start = perf_counter()
@@ -305,6 +314,48 @@ class WaypointEngine:
     def _reset_engine_state_sync(self) -> None:
         engine = self._require_engine()
         engine.reset()
+
+    def _roll_session_if_needed_sync(self) -> None:
+        frame_limit = self._frame_history_limit_sync()
+        if frame_limit is None:
+            return
+
+        frame_timestamp = self._current_frame_timestamp_sync()
+        if frame_timestamp is None or frame_timestamp < frame_limit:
+            return
+
+        rollover_seed = self._last_frame if self._last_frame is not None else self._require_seed_frame()
+        self._logger.warning(
+            "waypoint.engine.generate_frame frame_history_limit_reached frame_timestamp=%s frame_limit=%s",
+            frame_timestamp,
+            frame_limit,
+        )
+        self._reset_session_sync(self._current_prompt, seed_frame=rollover_seed)
+
+    def _frame_history_limit_sync(self) -> int | None:
+        engine = self._require_engine()
+        model_cfg = getattr(engine, "model_cfg", None)
+        raw_limit = getattr(model_cfg, "n_frames", None)
+        if raw_limit is None:
+            return None
+        try:
+            frame_limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return None
+        return frame_limit if frame_limit > 0 else None
+
+    def _current_frame_timestamp_sync(self) -> int | None:
+        engine = self._require_engine()
+        frame_ts = getattr(engine, "frame_ts", None)
+        if frame_ts is None:
+            return None
+        try:
+            return int(frame_ts.reshape(-1)[0].item())
+        except Exception:
+            try:
+                return int(frame_ts)
+            except Exception:
+                return None
 
     def _load_seed_frame(self) -> np.ndarray:
         start = perf_counter()
