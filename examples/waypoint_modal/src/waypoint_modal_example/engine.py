@@ -13,31 +13,12 @@ import numpy as np
 
 from .config import WaypointRuntimeConfig
 
-_KEY_W = ord("W")
-_KEY_A = ord("A")
-_KEY_S = ord("S")
-_KEY_D = ord("D")
-_KEY_SHIFT = 0x10
-_KEY_CTRL = 0x11
-_KEY_SPACE = 0x20
-_KEY_MOUSE_LEFT = 0x01
-_KEY_MOUSE_RIGHT = 0x02
-
-
 @dataclass(frozen=True, slots=True)
 class WaypointControlState:
-    forward: bool = False
-    backward: bool = False
-    left: bool = False
-    right: bool = False
-    jump: bool = False
-    sprint: bool = False
-    crouch: bool = False
-    primary_fire: bool = False
-    secondary_fire: bool = False
-    mouse_x: float = 0.0
-    mouse_y: float = 0.0
-    scroll_wheel: int = 0
+    buttons: frozenset[int] = frozenset()
+    mouse_dx: float = 0.0
+    mouse_dy: float = 0.0
+    scroll_amount: int = 0
 
 
 class WaypointEngine:
@@ -392,30 +373,10 @@ class WaypointEngine:
         ctrl_cls = self._ctrl_cls
         if ctrl_cls is None:
             raise RuntimeError("waypoint control class is not loaded")
-
-        buttons: set[int] = set()
-        if controls.forward:
-            buttons.add(_KEY_W)
-        if controls.backward:
-            buttons.add(_KEY_S)
-        if controls.left:
-            buttons.add(_KEY_A)
-        if controls.right:
-            buttons.add(_KEY_D)
-        if controls.jump:
-            buttons.add(_KEY_SPACE)
-        if controls.sprint:
-            buttons.add(_KEY_SHIFT)
-        if controls.crouch:
-            buttons.add(_KEY_CTRL)
-        if controls.primary_fire:
-            buttons.add(_KEY_MOUSE_LEFT)
-        if controls.secondary_fire:
-            buttons.add(_KEY_MOUSE_RIGHT)
         return ctrl_cls(
-            button=buttons,
-            mouse=(float(controls.mouse_x), float(controls.mouse_y)),
-            scroll_wheel=int(controls.scroll_wheel),
+            button=set(controls.buttons),
+            mouse=(float(controls.mouse_dx), float(controls.mouse_dy)),
+            scroll_wheel=int(controls.scroll_amount),
         )
 
     def _require_engine(self):

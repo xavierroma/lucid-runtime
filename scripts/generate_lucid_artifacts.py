@@ -18,6 +18,9 @@ WAYPOINT_MANIFEST_PATH = (
     ROOT / "packages" / "contracts" / "generated" / "lucid_manifest.waypoint.json"
 )
 TS_PATH = ROOT / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.ts"
+WAYPOINT_TS_PATH = (
+    ROOT / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.waypoint.ts"
+)
 
 
 def main() -> int:
@@ -41,6 +44,7 @@ def main() -> int:
     )
     TS_PATH.parent.mkdir(parents=True, exist_ok=True)
     TS_PATH.write_text(render_ts(yume_manifest), encoding="utf-8")
+    WAYPOINT_TS_PATH.write_text(render_ts(waypoint_manifest), encoding="utf-8")
     return 0
 
 

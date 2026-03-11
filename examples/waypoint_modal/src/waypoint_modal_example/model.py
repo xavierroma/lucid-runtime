@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated
@@ -32,6 +33,8 @@ class WaypointLucidModel(VideoModel):
         super().__init__(config)
         self._engine: WaypointEngine | None = None
         self._compiler_cache_committed = False
+        self._transient_inputs: dict[str, _TransientWaypointInput] = {}
+        self._transient_inputs_lock = asyncio.Lock()
 
     def resolve_outputs(self, outputs):
         runtime_config = self.runtime_config
@@ -94,38 +97,46 @@ class WaypointLucidModel(VideoModel):
         _ = prompt
 
     @action(
-        name="set_controls",
-        description="Set held controls and look velocity for Waypoint.",
+        name="set_buttons",
+        description="Set the held button IDs for Waypoint.",
         mode="state",
     )
-    def set_controls(
+    def set_buttons(
         self,
-        forward: bool = False,
-        backward: bool = False,
-        left: bool = False,
-        right: bool = False,
-        jump: bool = False,
-        sprint: bool = False,
-        crouch: bool = False,
-        primary_fire: bool = False,
-        secondary_fire: bool = False,
-        mouse_x: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0,
-        mouse_y: Annotated[float, Field(ge=-1.0, le=1.0)] = 0.0,
-        scroll_wheel: Annotated[int, Field(ge=-1, le=1)] = 0,
+        buttons: list[Annotated[int, Field(ge=0, le=255)]] = Field(default_factory=list),
     ) -> None:
-        _ = (
-            forward,
-            backward,
-            left,
-            right,
-            jump,
-            sprint,
-            crouch,
-            primary_fire,
-            secondary_fire,
-            mouse_x,
-            mouse_y,
-            scroll_wheel,
+        _ = buttons
+
+    @action(
+        name="mouse_move",
+        description="Apply a relative mouse movement delta for the next Waypoint frame.",
+        mode="command",
+    )
+    async def mouse_move(
+        self,
+        ctx: SessionContext,
+        dx: float = 0.0,
+        dy: float = 0.0,
+    ) -> None:
+        await self._append_transient_input(
+            ctx.session_id,
+            dx=float(dx),
+            dy=float(dy),
+        )
+
+    @action(
+        name="scroll",
+        description="Apply a relative scroll wheel delta for the next Waypoint frame.",
+        mode="command",
+    )
+    async def scroll(
+        self,
+        ctx: SessionContext,
+        amount: int = 0,
+    ) -> None:
+        await self._append_transient_input(
+            ctx.session_id,
+            scroll_amount=int(amount),
         )
 
     async def start_session(self, ctx: SessionContext) -> None:
@@ -178,7 +189,10 @@ class WaypointLucidModel(VideoModel):
                         len(prompt),
                     )
 
-                controls = _resolve_controls(ctx)
+                controls = WaypointControlState(
+                    buttons=_resolve_buttons(ctx),
+                    **(await self._drain_transient_input(ctx.session_id)).as_control_kwargs(),
+                )
                 frame, inference_ms = await self._engine.generate_frame(controls)
                 ctx.record_inference_ms(inference_ms)
                 frame_index += 1
@@ -229,11 +243,57 @@ class WaypointLucidModel(VideoModel):
             if self._engine is not None:
                 await self._engine.end_session()
         finally:
+            await self._clear_transient_input(ctx.session_id)
             logger = self.logger or ctx.logger
             if logger is not None:
                 self._compiler_cache_committed = (
                     await asyncio.to_thread(_commit_compiler_cache_volume, logger, "session_end")
                 ) or self._compiler_cache_committed
+
+    async def _append_transient_input(
+        self,
+        session_id: str,
+        *,
+        dx: float = 0.0,
+        dy: float = 0.0,
+        scroll_amount: int = 0,
+    ) -> None:
+        async with self._transient_inputs_lock:
+            current = self._transient_inputs.setdefault(session_id, _TransientWaypointInput())
+            current.mouse_dx += dx
+            current.mouse_dy += dy
+            current.scroll_amount += scroll_amount
+
+    async def _drain_transient_input(self, session_id: str) -> "_TransientWaypointInput":
+        async with self._transient_inputs_lock:
+            current = self._transient_inputs.setdefault(session_id, _TransientWaypointInput())
+            drained = _TransientWaypointInput(
+                mouse_dx=current.mouse_dx,
+                mouse_dy=current.mouse_dy,
+                scroll_amount=current.scroll_amount,
+            )
+            current.mouse_dx = 0.0
+            current.mouse_dy = 0.0
+            current.scroll_amount = 0
+            return drained
+
+    async def _clear_transient_input(self, session_id: str) -> None:
+        async with self._transient_inputs_lock:
+            self._transient_inputs.pop(session_id, None)
+
+
+@dataclass(slots=True)
+class _TransientWaypointInput:
+    mouse_dx: float = 0.0
+    mouse_dy: float = 0.0
+    scroll_amount: int = 0
+
+    def as_control_kwargs(self) -> dict[str, float | int]:
+        return {
+            "mouse_dx": self.mouse_dx,
+            "mouse_dy": self.mouse_dy,
+            "scroll_amount": self.scroll_amount,
+        }
 
 
 def _resolve_prompt(ctx: SessionContext, default_prompt: str) -> str:
@@ -244,24 +304,12 @@ def _resolve_prompt(ctx: SessionContext, default_prompt: str) -> str:
     return prompt
 
 
-def _resolve_controls(ctx: SessionContext) -> WaypointControlState:
-    control_state = ctx.state.get("set_controls")
-    if control_state is None:
-        return WaypointControlState()
-    return WaypointControlState(
-        forward=bool(getattr(control_state, "forward", False)),
-        backward=bool(getattr(control_state, "backward", False)),
-        left=bool(getattr(control_state, "left", False)),
-        right=bool(getattr(control_state, "right", False)),
-        jump=bool(getattr(control_state, "jump", False)),
-        sprint=bool(getattr(control_state, "sprint", False)),
-        crouch=bool(getattr(control_state, "crouch", False)),
-        primary_fire=bool(getattr(control_state, "primary_fire", False)),
-        secondary_fire=bool(getattr(control_state, "secondary_fire", False)),
-        mouse_x=float(getattr(control_state, "mouse_x", 0.0)),
-        mouse_y=float(getattr(control_state, "mouse_y", 0.0)),
-        scroll_wheel=int(getattr(control_state, "scroll_wheel", 0)),
-    )
+def _resolve_buttons(ctx: SessionContext) -> frozenset[int]:
+    button_state = ctx.state.get("set_buttons")
+    if button_state is None:
+        return frozenset()
+    raw_buttons = getattr(button_state, "buttons", [])
+    return frozenset(int(button) for button in raw_buttons)
 
 
 def _commit_compiler_cache_volume(logger, reason: str = "session_end") -> bool:

@@ -11,11 +11,6 @@ import {
   EnvironmentStudio,
   type SaveEnvironmentInput,
 } from "@/components/environment-studio"
-import { WaypointControls } from "@/components/waypoint-controls"
-import type {
-  WaypointControlState,
-  WaypointHoldControl,
-} from "@/components/waypoint-controls"
 import {
   Select,
   SelectContent,
@@ -41,11 +36,9 @@ import {
   type SavedEnvironment,
 } from "@/lib/environments"
 import {
-  buildWaypointControlState,
   sortUniqueButtonIds,
-  toWaypointLookPreview,
-  waypointButtonIdForHoldControl,
   waypointButtonIdForKeyboardCode,
+  waypointButtonIdForPointerButton,
   WAYPOINT_MOUSE_WHEEL_STEP,
 } from "@/lib/waypoint"
 
@@ -59,24 +52,8 @@ interface DisplayStatus {
   tone: DisplayTone
 }
 
-type WaypointButtonSourceMap = Record<string, number>
-
 const ENVIRONMENT_ROUTE: AppRoute = "/environments"
-
-const DEFAULT_WAYPOINT_CONTROLS: WaypointControlState = {
-  forward: false,
-  backward: false,
-  left: false,
-  right: false,
-  jump: false,
-  sprint: false,
-  crouch: false,
-  primary_fire: false,
-  secondary_fire: false,
-  mouse_x: 0,
-  mouse_y: 0,
-  scroll_wheel: 0,
-}
+type WaypointButtonSourceMap = Record<string, number>
 
 const MODEL_OPTIONS: Array<{
   name: DemoModelName
@@ -273,13 +250,6 @@ export function App() {
   const [selectedModel, setSelectedModel] = useState<DemoModelName>(demoEnv.defaultModel)
   const [waypointButtonSources, setWaypointButtonSources] =
     useState<WaypointButtonSourceMap>({})
-  const [waypointLookPreview, setWaypointLookPreview] = useState(() => ({
-    mouse_x: DEFAULT_WAYPOINT_CONTROLS.mouse_x,
-    mouse_y: DEFAULT_WAYPOINT_CONTROLS.mouse_y,
-  }))
-  const [waypointScrollAmount, setWaypointScrollAmount] = useState(
-    DEFAULT_WAYPOINT_CONTROLS.scroll_wheel,
-  )
   const [queuedMouseMove, setQueuedMouseMove] = useState<QueuedMouseMove | null>(null)
   const [queuedScroll, setQueuedScroll] = useState<QueuedScroll | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
@@ -290,6 +260,7 @@ export function App() {
   const [roomConnected, setRoomConnected] = useState(false)
   const [trackReady, setTrackReady] = useState(false)
   const actionNonceRef = useRef(0)
+  const waypointBindingTargetRef = useRef<HTMLDivElement | null>(null)
 
   const session = sessionResponse?.session ?? null
   const capabilities = sessionResponse?.capabilities ?? null
@@ -308,25 +279,10 @@ export function App() {
   const waypointButtonsSupported = hasWaypointButtonAction(capabilities)
   const waypointMouseMoveSupported = hasWaypointMouseMoveAction(capabilities)
   const waypointScrollSupported = hasWaypointScrollAction(capabilities)
-  const waypointControlSurfaceSupported =
-    waypointButtonsSupported &&
-    waypointMouseMoveSupported &&
-    waypointScrollSupported
   const waypointModelActive = resolvedModel === "waypoint"
-  const showWaypointControls = waypointModelActive && hasActiveSession
   const waypointButtonIds = useMemo(
     () => sortUniqueButtonIds(Object.values(waypointButtonSources)),
     [waypointButtonSources],
-  )
-  const waypointControls: WaypointControlState = useMemo(
-    () =>
-      buildWaypointControlState({
-        buttonIds: waypointButtonIds,
-        mouseX: waypointLookPreview.mouse_x,
-        mouseY: waypointLookPreview.mouse_y,
-        scrollAmount: waypointScrollAmount,
-      }),
-    [waypointButtonIds, waypointLookPreview.mouse_x, waypointLookPreview.mouse_y, waypointScrollAmount],
   )
   const canStartSession = Boolean(
     session?.state === "READY" &&
@@ -467,28 +423,9 @@ export function App() {
       return
     }
     setWaypointButtonSources({})
-    setWaypointLookPreview({
-      mouse_x: DEFAULT_WAYPOINT_CONTROLS.mouse_x,
-      mouse_y: DEFAULT_WAYPOINT_CONTROLS.mouse_y,
-    })
-    setWaypointScrollAmount(DEFAULT_WAYPOINT_CONTROLS.scroll_wheel)
     setQueuedMouseMove(null)
     setQueuedScroll(null)
   }, [hasActiveSession, waypointModelActive])
-
-  useEffect(() => {
-    if (waypointScrollAmount === 0) {
-      return
-    }
-
-    const timeoutId = window.setTimeout(() => {
-      setWaypointScrollAmount(0)
-    }, 160)
-
-    return () => {
-      window.clearTimeout(timeoutId)
-    }
-  }, [waypointScrollAmount])
 
   useEffect(() => {
     if (!hasActiveSession || !waypointButtonsSupported || resolvedModel !== "waypoint") {
@@ -533,6 +470,70 @@ export function App() {
       window.removeEventListener("keyup", handleKeyUp)
     }
   }, [hasActiveSession, resolvedModel, waypointButtonsSupported])
+
+  useEffect(() => {
+    if (!hasActiveSession || resolvedModel !== "waypoint") {
+      return
+    }
+
+    const bindingTarget = waypointBindingTargetRef.current
+    if (!bindingTarget) {
+      return
+    }
+
+    const releasePointerButtons = () => {
+      for (const button of [0, 2]) {
+        const buttonId = waypointButtonIdForPointerButton(button)
+        if (buttonId !== null) {
+          setWaypointButtonSource(`mouse:${button}`, false, buttonId)
+        }
+      }
+    }
+
+    const isPointerLockedToTarget = () => document.pointerLockElement === bindingTarget
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!waypointMouseMoveSupported || !isPointerLockedToTarget()) {
+        return
+      }
+      if (event.movementX === 0 && event.movementY === 0) {
+        return
+      }
+      setQueuedMouseMove({
+        nonce: nextActionNonce(),
+        dx: event.movementX,
+        dy: event.movementY,
+      })
+    }
+
+    const handleMouseUp = (event: MouseEvent) => {
+      const buttonId = waypointButtonIdForPointerButton(event.button)
+      if (buttonId === null) {
+        return
+      }
+      setWaypointButtonSource(`mouse:${event.button}`, false, buttonId)
+    }
+
+    const handlePointerLockChange = () => {
+      if (!isPointerLockedToTarget()) {
+        releasePointerButtons()
+      }
+    }
+
+    document.addEventListener("mousemove", handleMouseMove)
+    document.addEventListener("mouseup", handleMouseUp)
+    document.addEventListener("pointerlockchange", handlePointerLockChange)
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove)
+      document.removeEventListener("mouseup", handleMouseUp)
+      document.removeEventListener("pointerlockchange", handlePointerLockChange)
+      releasePointerButtons()
+    }
+  }, [
+    hasActiveSession,
+    resolvedModel,
+    waypointMouseMoveSupported,
+  ])
 
   const navigateTo = (nextRoute: AppRoute) => {
     if (window.location.pathname !== nextRoute) {
@@ -716,7 +717,53 @@ export function App() {
               {status.label}
             </div>
 
-            <div className="console-screen">
+            <div
+              ref={waypointBindingTargetRef}
+              className="console-screen"
+              onContextMenu={(event) => {
+                if (waypointModelActive && hasActiveSession) {
+                  event.preventDefault()
+                }
+              }}
+              onMouseDown={(event) => {
+                if (!waypointModelActive || !hasActiveSession) {
+                  return
+                }
+
+                const buttonId = waypointButtonIdForPointerButton(event.button)
+                if (buttonId !== null && waypointButtonsSupported) {
+                  event.preventDefault()
+                  setWaypointButtonSource(`mouse:${event.button}`, true, buttonId)
+                }
+
+                if (
+                  waypointMouseMoveSupported &&
+                  document.pointerLockElement !== event.currentTarget
+                ) {
+                  event.preventDefault()
+                  void event.currentTarget.requestPointerLock()
+                }
+              }}
+              onWheel={(event) => {
+                if (
+                  !waypointModelActive ||
+                  !hasActiveSession ||
+                  !waypointScrollSupported ||
+                  event.deltaY === 0
+                ) {
+                  return
+                }
+
+                event.preventDefault()
+                setQueuedScroll({
+                  nonce: nextActionNonce(),
+                  amount:
+                    event.deltaY < 0
+                      ? WAYPOINT_MOUSE_WHEEL_STEP
+                      : -WAYPOINT_MOUSE_WHEEL_STEP,
+                })
+              }}
+            >
               <ConsoleRoom
                 session={session}
                 token={sessionToken}
@@ -809,42 +856,6 @@ export function App() {
                 </div>
               )}
             </section>
-
-            {showWaypointControls ? (
-              <WaypointControls
-                value={waypointControls}
-                disabled={!waypointControlSurfaceSupported || createPending || endPending}
-                onHoldChange={(control: WaypointHoldControl, pressed: boolean) => {
-                  setWaypointButtonSource(
-                    `deck:${control}`,
-                    pressed,
-                    waypointButtonIdForHoldControl(control),
-                  )
-                }}
-                onLookChange={(deltaX, deltaY) => {
-                  setWaypointLookPreview(toWaypointLookPreview(deltaX, deltaY))
-                  setQueuedMouseMove({
-                    nonce: nextActionNonce(),
-                    dx: deltaX,
-                    dy: deltaY,
-                  })
-                }}
-                onLookReset={() => {
-                  setWaypointLookPreview({
-                    mouse_x: DEFAULT_WAYPOINT_CONTROLS.mouse_x,
-                    mouse_y: DEFAULT_WAYPOINT_CONTROLS.mouse_y,
-                  })
-                }}
-                onScrollNudge={(direction) => {
-                  const amount = direction * WAYPOINT_MOUSE_WHEEL_STEP
-                  setWaypointScrollAmount(amount)
-                  setQueuedScroll({
-                    nonce: nextActionNonce(),
-                    amount,
-                  })
-                }}
-              />
-            ) : null}
 
             <div className="model-picker">
               <Select
