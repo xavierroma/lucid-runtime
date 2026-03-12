@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from types import SimpleNamespace
+from pathlib import Path
 
 from lucid_modal import (
     FunctionCallStatus,
@@ -10,6 +11,7 @@ from lucid_modal import (
     ModalSessionDispatcher,
     mint_worker_access_token,
     spawn_session_call,
+    with_lucid_runtime,
 )
 
 
@@ -165,3 +167,45 @@ def test_spawn_session_call_looks_up_worker_class(monkeypatch) -> None:
     assert calls[0] == ("lookup", "app-1:WarmSessionWorker", {})
     assert calls[1][0] == "call"
     assert calls[2][0] == "spawn"
+
+
+def test_with_lucid_runtime_uses_absolute_package_and_extra_dirs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    extra_dir = tmp_path / "demo"
+    extra_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    class FakeImage:
+        def __init__(self) -> None:
+            self.local_dirs: list[tuple[str, str]] = []
+            self.commands: list[str] = []
+
+        def apt_install(self, *_args):
+            return self
+
+        def add_local_dir(self, src: str, dest: str, *, copy: bool, ignore):
+            assert copy is True
+            assert ignore is not None
+            self.local_dirs.append((src, dest))
+            return self
+
+        def run_commands(self, *commands: str):
+            self.commands.extend(commands)
+            return self
+
+    image = with_lucid_runtime(
+        FakeImage(),
+        extra_local_dirs=[("demo", "/workspace/demo")],
+    )
+
+    assert Path(image.local_dirs[0][0]).is_absolute()
+    assert Path(image.local_dirs[0][0]).exists()
+    assert Path(image.local_dirs[1][0]).is_absolute()
+    assert Path(image.local_dirs[1][0]).exists()
+    assert image.local_dirs[2] == (str(extra_dir.resolve()), "/workspace/demo")
+    assert image.commands == [
+        "python -m pip install '/workspace/packages/lucid[livekit]'",
+        "python -m pip install /workspace/packages/lucid-modal",
+    ]

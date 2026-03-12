@@ -28,6 +28,7 @@ YUME_COMMIT = os.getenv(
 MODEL_VOLUME_NAME = os.getenv("MODAL_MODEL_VOLUME", "lucid-yume-models")
 HF_CACHE_VOLUME_NAME = os.getenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
 PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 image = with_lucid_runtime(
     modal.Image.from_registry(CUDA_DEVEL_IMAGE, add_python=PYTHON_VERSION)
     .apt_install("build-essential", "git")
@@ -68,7 +69,7 @@ image = with_lucid_runtime(
         "peft==0.13.2",
         "sentencepiece>=0.2,<0.3",
     ),
-    extra_local_dirs=[("examples/yume_modal", "/workspace/examples/yume_modal")],
+    extra_local_dirs=[(str(PROJECT_ROOT), "/workspace/examples/yume_modal")],
 )
 image = image.run_commands("python -m pip install --no-deps /workspace/examples/yume_modal")
 model_volume = modal.Volume.from_name(MODEL_VOLUME_NAME, create_if_missing=True)

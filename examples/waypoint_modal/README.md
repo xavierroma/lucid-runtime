@@ -47,21 +47,21 @@ uv run --project examples/waypoint_modal --extra test pytest examples/waypoint_m
 This example keeps its Modal entrypoint in
 [`modal_app.py`](src/waypoint_modal_example/modal_app.py), but the shared Modal runtime now lives in `lucid-modal`.
 
-Copy the example env file, then create volumes, download the checkpoints, and deploy:
+From the example directory, copy the env file, then create volumes, download the checkpoints, and deploy:
 
 ```bash
-cp examples/waypoint_modal/modal.env.example .env.waypoint
-uv run --project packages/lucid-modal lucid-modal create-volumes --env-file .env.waypoint
-uv run --project packages/lucid-modal lucid-modal download-model --env-file .env.waypoint
-uv run --project packages/lucid-modal lucid-modal deploy --env-file .env.waypoint
+cd examples/waypoint_modal
+cp modal.env.example .env.waypoint
+uv sync --extra test
+uv run lucid-modal create-volumes --env-file .env.waypoint
+uv run lucid-modal download-model --env-file .env.waypoint
+uv run lucid-modal deploy --env-file .env.waypoint
 ```
 
 The required example-owned env is now the model/runtime config itself:
 
 ```bash
-MODAL_PROJECT_PATH=examples/waypoint_modal
-MODAL_PROJECT_SRC=examples/waypoint_modal/src
-MODAL_APP_ENTRYPOINT=examples/waypoint_modal/src/waypoint_modal_example/modal_app.py
+MODAL_APP_ENTRYPOINT=waypoint_modal_example.modal_app
 MODAL_APP_NAME=lucid-waypoint-worker
 MODAL_GPU=RTX-PRO-6000
 MODAL_MODEL_VOLUME=lucid-waypoint-models
