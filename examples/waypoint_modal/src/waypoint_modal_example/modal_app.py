@@ -39,6 +39,7 @@ WORLD_ENGINE_COMMIT = os.getenv(
 MODEL_VOLUME_NAME = os.getenv("MODAL_MODEL_VOLUME", "lucid-waypoint-models")
 HF_CACHE_VOLUME_NAME = os.getenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
 PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _cache_slug(value: str) -> str:
@@ -93,7 +94,7 @@ image = with_lucid_runtime(
             f"'git+{WORLD_ENGINE_REPO_URL}@{WORLD_ENGINE_COMMIT}'"
         ),
     ),
-    extra_local_dirs=[("examples/waypoint_modal", "/workspace/examples/waypoint_modal")],
+    extra_local_dirs=[(str(PROJECT_ROOT), "/workspace/examples/waypoint_modal")],
 )
 image = image.run_commands("python -m pip install --no-deps /workspace/examples/waypoint_modal")
 model_volume = modal.Volume.from_name(MODEL_VOLUME_NAME, create_if_missing=True)

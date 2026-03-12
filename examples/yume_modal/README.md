@@ -47,21 +47,21 @@ uv run --project examples/yume_modal --extra test pytest examples/yume_modal/tes
 This example keeps its Modal entrypoint in
 [`modal_app.py`](src/yume_modal_example/modal_app.py), but the shared Modal runtime now lives in `lucid-modal`.
 
-Copy the example env file, then create volumes, download the checkpoint, and deploy:
+From the example directory, copy the env file, then create volumes, download the checkpoint, and deploy:
 
 ```bash
-cp examples/yume_modal/modal.env.example .env.yume
-uv run --project packages/lucid-modal lucid-modal create-volumes --env-file .env.yume
-uv run --project packages/lucid-modal lucid-modal download-model --env-file .env.yume -- --repo-id stdstu123/Yume-5B-720P
-uv run --project packages/lucid-modal lucid-modal deploy --env-file .env.yume
+cd examples/yume_modal
+cp modal.env.example .env.yume
+uv sync --extra test
+uv run lucid-modal create-volumes --env-file .env.yume
+uv run lucid-modal download-model --env-file .env.yume -- --repo-id stdstu123/Yume-5B-720P
+uv run lucid-modal deploy --env-file .env.yume
 ```
 
 The required example-owned env is now just the Modal and model/runtime configuration:
 
 ```bash
-MODAL_PROJECT_PATH=examples/yume_modal
-MODAL_PROJECT_SRC=examples/yume_modal/src
-MODAL_APP_ENTRYPOINT=examples/yume_modal/src/yume_modal_example/modal_app.py
+MODAL_APP_ENTRYPOINT=yume_modal_example.modal_app
 MODAL_APP_NAME=lucid-runtime-worker
 MODAL_GPU=A100
 MODAL_MODEL_VOLUME=lucid-yume-models

@@ -47,30 +47,53 @@ def ignore_local_artifacts(path: Path) -> bool:
     return path.suffix in {".pyc", ".pyo"}
 
 
+def _package_project_root(path: str | Path) -> Path:
+    return Path(path).resolve().parents[2]
+
+
+def _resolve_local_dir(path: str | Path) -> str:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return str(candidate)
+    if candidate.exists():
+        return str(candidate.resolve())
+    repo_candidate = Path(__file__).resolve().parents[4] / candidate
+    if repo_candidate.exists():
+        return str(repo_candidate.resolve())
+    return str(candidate.resolve())
+
+
 def with_lucid_runtime(
     image,
     *,
     include_livekit: bool = True,
     extra_local_dirs: list[tuple[str, str]] | None = None,
 ):
+    lucid_project_root = _package_project_root(inspect.getfile(LucidRuntime))
+    lucid_modal_project_root = _package_project_root(__file__)
     runtime_dep = "/workspace/packages/lucid[livekit]" if include_livekit else "/workspace/packages/lucid"
     updated = (
         image.apt_install("ffmpeg", "ca-certificates")
         .add_local_dir(
-            "packages/lucid",
+            str(lucid_project_root),
             "/workspace/packages/lucid",
             copy=True,
             ignore=ignore_local_artifacts,
         )
         .add_local_dir(
-            "packages/lucid-modal",
+            str(lucid_modal_project_root),
             "/workspace/packages/lucid-modal",
             copy=True,
             ignore=ignore_local_artifacts,
         )
     )
     for src, dest in extra_local_dirs or []:
-        updated = updated.add_local_dir(src, dest, copy=True, ignore=ignore_local_artifacts)
+        updated = updated.add_local_dir(
+            _resolve_local_dir(src),
+            dest,
+            copy=True,
+            ignore=ignore_local_artifacts,
+        )
     return updated.run_commands(
         f"python -m pip install '{runtime_dep}'",
         "python -m pip install /workspace/packages/lucid-modal",

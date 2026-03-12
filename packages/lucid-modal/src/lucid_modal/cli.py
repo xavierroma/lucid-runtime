@@ -64,13 +64,62 @@ def _resolved_value(args: argparse.Namespace, env: dict[str, str], flag: str, en
     return env.get(env_name, os.getenv(env_name, "")).strip()
 
 
+def _resolve_project_root(args: argparse.Namespace, env: dict[str, str]) -> Path:
+    project_path = _resolved_value(args, env, "project_path", "MODAL_PROJECT_PATH") or "."
+    return Path(project_path).expanduser().resolve()
+
+
+def _resolve_project_src(args: argparse.Namespace, env: dict[str, str], project_root: Path) -> str:
+    configured = _resolved_value(args, env, "project_src", "MODAL_PROJECT_SRC")
+    if configured:
+        return configured
+    if (project_root / "src").exists():
+        return "src"
+    return ""
+
+
+def _build_modal_target(
+    app_entrypoint: str,
+    *,
+    project_root: Path,
+    project_src: str,
+    function_name: str | None = None,
+) -> list[str]:
+    entrypoint = app_entrypoint.strip()
+    if not entrypoint:
+        raise RuntimeError("MODAL_APP_ENTRYPOINT is required")
+
+    if entrypoint.endswith(".py") or "/" in entrypoint or os.sep in entrypoint:
+        entry_path = Path(entrypoint)
+        if not entry_path.is_absolute():
+            entry_path = (project_root / entry_path).resolve()
+
+        if project_src:
+            src_root = (project_root / project_src).resolve()
+            if entry_path.is_relative_to(src_root):
+                module_ref = ".".join(entry_path.relative_to(src_root).with_suffix("").parts)
+                if function_name is not None:
+                    module_ref = f"{module_ref}::{function_name}"
+                return ["-m", module_ref]
+
+        path_ref = str(entry_path)
+        if function_name is not None:
+            path_ref = f"{path_ref}::{function_name}"
+        return [path_ref]
+
+    module_ref = entrypoint
+    if function_name is not None:
+        module_ref = f"{module_ref}::{function_name}"
+    return ["-m", module_ref]
+
+
 def _run_modal(args: argparse.Namespace) -> int:
     env_file_values = _load_env_file(args.env_file)
     full_env = os.environ.copy()
     full_env.update(env_file_values)
 
-    project_path = _resolved_value(args, env_file_values, "project_path", "MODAL_PROJECT_PATH")
-    project_src = _resolved_value(args, env_file_values, "project_src", "MODAL_PROJECT_SRC")
+    project_root = _resolve_project_root(args, env_file_values)
+    project_src = _resolve_project_src(args, env_file_values, project_root)
     app_entrypoint = _resolved_value(args, env_file_values, "app_entrypoint", "MODAL_APP_ENTRYPOINT")
     app_name = _resolved_value(args, env_file_values, "app_name", "MODAL_APP_NAME")
 
@@ -78,42 +127,61 @@ def _run_modal(args: argparse.Namespace) -> int:
         raise RuntimeError("MODAL_APP_ENTRYPOINT is required")
     if args.command in {"logs", "stop"} and not app_name:
         raise RuntimeError("MODAL_APP_NAME is required")
-    if not project_path:
-        raise RuntimeError("MODAL_PROJECT_PATH is required")
 
-    repo_root = Path(__file__).resolve().parents[4]
+    project_src_root = (project_root / project_src).resolve() if project_src else None
     full_env["PYTHONPATH"] = ":".join(
-        part for part in [str(repo_root / project_src) if project_src else "", full_env.get("PYTHONPATH", "")] if part
+        part
+        for part in [
+            str(project_src_root) if project_src_root is not None else "",
+            full_env.get("PYTHONPATH", ""),
+        ]
+        if part
     )
 
     if args.command == "create-volumes":
-        return _create_volumes(full_env, project_path)
+        return _create_volumes(full_env, project_root)
     if args.command == "download-model":
-        return _exec_modal(project_path, ["run", f"{app_entrypoint}::download_model", *args.modal_args], full_env)
+        modal_target = _build_modal_target(
+            app_entrypoint,
+            project_root=project_root,
+            project_src=project_src,
+            function_name="download_model",
+        )
+        return _exec_modal(project_root, ["run", *modal_target, *args.modal_args], full_env)
     if args.command == "deploy":
-        return _exec_modal(project_path, ["deploy", app_entrypoint, *args.modal_args], full_env)
+        modal_target = _build_modal_target(
+            app_entrypoint,
+            project_root=project_root,
+            project_src=project_src,
+        )
+        return _exec_modal(project_root, ["deploy", *modal_target, *args.modal_args], full_env)
     if args.command == "serve":
-        return _exec_modal(project_path, ["serve", app_entrypoint, *args.modal_args], full_env)
+        modal_target = _build_modal_target(
+            app_entrypoint,
+            project_root=project_root,
+            project_src=project_src,
+        )
+        return _exec_modal(project_root, ["serve", *modal_target, *args.modal_args], full_env)
     if args.command == "logs":
-        return _exec_modal(project_path, ["app", "logs", *args.modal_args, app_name], full_env)
+        return _exec_modal(project_root, ["app", "logs", *args.modal_args, app_name], full_env)
     if args.command == "stop":
-        return _exec_modal(project_path, ["app", "stop", *args.modal_args, app_name], full_env)
+        return _exec_modal(project_root, ["app", "stop", *args.modal_args, app_name], full_env)
     raise RuntimeError(f"unsupported command: {args.command}")
 
 
-def _create_volumes(env: dict[str, str], project_path: str) -> int:
+def _create_volumes(env: dict[str, str], project_root: Path) -> int:
     model_volume = env.get("MODAL_MODEL_VOLUME", "lucid-models").strip()
     hf_volume = env.get("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache").strip()
     for volume_name in (model_volume, hf_volume):
-        result = _exec_modal(project_path, ["volume", "create", volume_name], env, check=False)
+        result = _exec_modal(project_root, ["volume", "create", volume_name], env, check=False)
         if result not in {0, 1}:
             return result
     return 0
 
 
-def _exec_modal(project_path: str, modal_args: list[str], env: dict[str, str], *, check: bool = True) -> int:
-    command = ["uv", "run", "--project", project_path, "modal", *modal_args]
-    completed = subprocess.run(command, env=env, check=False)
+def _exec_modal(project_root: Path, modal_args: list[str], env: dict[str, str], *, check: bool = True) -> int:
+    command = [sys.executable, "-m", "modal", *modal_args]
+    completed = subprocess.run(command, cwd=project_root, env=env, check=False)
     if check and completed.returncode != 0:
         raise SystemExit(completed.returncode)
     return completed.returncode
