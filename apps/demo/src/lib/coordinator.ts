@@ -23,11 +23,46 @@ export interface OutputBinding {
   topic?: string | null
 }
 
-export interface ManifestAction {
+export interface HoldInputBinding {
+  kind: "hold"
+  keys: string[]
+  mouse_buttons: number[]
+}
+
+export interface PressInputBinding {
+  kind: "press"
+  keys: string[]
+  mouse_buttons: number[]
+}
+
+export interface AxisInputBinding {
+  kind: "axis"
+  positive_keys: string[]
+  negative_keys: string[]
+}
+
+export interface PointerInputBinding {
+  kind: "pointer"
+  pointer_lock: boolean
+}
+
+export interface WheelInputBinding {
+  kind: "wheel"
+  step: number
+}
+
+export type InputBinding =
+  | HoldInputBinding
+  | PressInputBinding
+  | AxisInputBinding
+  | PointerInputBinding
+  | WheelInputBinding
+
+export interface ManifestInput {
   name: string
   description?: string | null
-  mode: string
   args_schema: Record<string, unknown>
+  binding?: InputBinding
 }
 
 export interface ManifestOutput {
@@ -44,7 +79,7 @@ export interface LucidManifest {
     name: string
     description?: string | null
   }
-  actions: ManifestAction[]
+  inputs: ManifestInput[]
   outputs: ManifestOutput[]
 }
 

@@ -560,7 +560,7 @@ class SessionControlReducer:
             self._logger.warning("invalid action payload name=%s args_type=%s", name, type(args))
             return ControlOutcome()
         try:
-            await self._runtime.dispatch_action(self._session_ctx, name, args)
+            await self._runtime.dispatch_input(self._session_ctx, name, args)
         except ActionDispatchError as exc:
             self._logger.warning("failed dispatching action %s: %s", name, exc)
         return ControlOutcome()

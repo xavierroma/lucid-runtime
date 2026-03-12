@@ -8,8 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lucid.config import RuntimeConfig
-from yume_modal_example.config import YumeRuntimeConfig, build_runtime_config
+from yume_modal_example.config import YumeRuntimeConfig
 from yume_modal_example.engine import YumeEngine
 
 
@@ -27,13 +26,10 @@ def fake_engine_env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _build_engine() -> tuple[YumeEngine, RuntimeConfig]:
-    host_config = RuntimeConfig.from_env()
-    engine = YumeEngine(
-        build_runtime_config(host_config),
-        logging.getLogger("tests.yume_engine"),
-    )
-    return engine, host_config
+def _build_engine() -> tuple[YumeEngine, YumeRuntimeConfig]:
+    runtime_config = YumeRuntimeConfig.from_env()
+    engine = YumeEngine(runtime_config, logging.getLogger("tests.yume_engine"))
+    return engine, runtime_config
 
 
 @pytest.mark.asyncio
@@ -139,9 +135,7 @@ async def test_real_mode_generation_does_not_block_event_loop() -> None:
     assert engine._runtime.reset_calls == 2
 
 
-def test_build_runtime_config_clamps_advertised_fps(fake_engine_env: None) -> None:
-    host_config = RuntimeConfig.from_env()
-    runtime_config = build_runtime_config(host_config)
+def test_runtime_config_from_env_reads_model_env(fake_engine_env: None) -> None:
+    runtime_config = YumeRuntimeConfig.from_env()
 
-    assert host_config.target_fps == 16
     assert runtime_config.target_fps == 2

@@ -7,8 +7,10 @@ from pathlib import Path
 
 import modal
 
-from lucid.config import RuntimeConfig
-from lucid.modal import create_app
+from lucid_modal import create_app, env_secret, load_runtime_config_from_env, with_lucid_runtime
+
+from .config import YumeRuntimeConfig
+from .model import YumeLucidModel
 
 APP_NAME = os.getenv("MODAL_APP_NAME", "lucid-runtime-worker")
 DISPATCH_TOKEN = os.getenv("MODAL_DISPATCH_TOKEN", "")
@@ -26,29 +28,9 @@ YUME_COMMIT = os.getenv(
 MODEL_VOLUME_NAME = os.getenv("MODAL_MODEL_VOLUME", "lucid-yume-models")
 HF_CACHE_VOLUME_NAME = os.getenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
 PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
-_LOCAL_IGNORE_PARTS = {"__pycache__", ".pytest_cache", ".venv", "build", "dist"}
-
-
-def _ignore_local_artifacts(path: Path) -> bool:
-    if any(part in _LOCAL_IGNORE_PARTS for part in path.parts):
-        return True
-    if any(part.endswith(".egg-info") for part in path.parts):
-        return True
-    return path.suffix in {".pyc", ".pyo"}
-
-
-def _env_secret(*names: str) -> modal.Secret:
-    payload = {}
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            payload[name] = value
-    return modal.Secret.from_dict(payload)
-
-
-image = (
+image = with_lucid_runtime(
     modal.Image.from_registry(CUDA_DEVEL_IMAGE, add_python=PYTHON_VERSION)
-    .apt_install("build-essential", "git", "ffmpeg", "ca-certificates")
+    .apt_install("build-essential", "git")
     .run_commands(
         f"git clone --filter=blob:none {YUME_REPO_URL} /opt/yume",
         f"cd /opt/yume && git checkout {YUME_COMMIT}",
@@ -85,39 +67,19 @@ image = (
         "imageio-ffmpeg==0.5.1",
         "peft==0.13.2",
         "sentencepiece>=0.2,<0.3",
-    )
-    .add_local_dir(
-        "packages/lucid",
-        "/workspace/packages/lucid",
-        copy=True,
-        ignore=_ignore_local_artifacts,
-    )
-    .add_local_dir(
-        "examples/yume_modal",
-        "/workspace/examples/yume_modal",
-        copy=True,
-        ignore=_ignore_local_artifacts,
-    )
-    .run_commands(
-        "python -m pip install '/workspace/packages/lucid[livekit]'",
-        "python -m pip install --no-deps /workspace/examples/yume_modal",
-    )
+    ),
+    extra_local_dirs=[("examples/yume_modal", "/workspace/examples/yume_modal")],
 )
+image = image.run_commands("python -m pip install --no-deps /workspace/examples/yume_modal")
 model_volume = modal.Volume.from_name(MODEL_VOLUME_NAME, create_if_missing=True)
 hf_cache_volume = modal.Volume.from_name(HF_CACHE_VOLUME_NAME, create_if_missing=True)
-download_image = (
+download_image = with_lucid_runtime(
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
-    .pip_install("huggingface_hub[hf_transfer]")
-    .add_local_dir(
-        "packages/lucid",
-        "/workspace/packages/lucid",
-        copy=True,
-        ignore=_ignore_local_artifacts,
-    )
-    .run_commands("python -m pip install /workspace/packages/lucid")
+    .pip_install("huggingface_hub[hf_transfer]"),
+    include_livekit=False,
 )
 
-runtime_secret = _env_secret(
+runtime_secret = env_secret(
     "MODAL_DISPATCH_TOKEN",
     "LIVEKIT_URL",
     "LIVEKIT_API_KEY",
@@ -127,8 +89,6 @@ runtime_secret = _env_secret(
     "HF_TOKEN",
     "WM_ENGINE",
     "WM_LIVEKIT_MODE",
-    "WM_MODEL_NAME",
-    "WM_MODEL_MODULE",
     "WM_STATUS_TOPIC",
     "WM_FRAME_WIDTH",
     "WM_FRAME_HEIGHT",
@@ -140,14 +100,16 @@ runtime_secret = _env_secret(
 
 modal_bundle = create_app(
     app_name=APP_NAME,
+    model=YumeLucidModel,
     image=image,
     gpu=GPU_TYPE,
     secrets=[runtime_secret],
+    model_config_loader=YumeRuntimeConfig.from_env,
     min_containers=MODAL_MIN_CONTAINERS,
     scaledown_window_secs=MODAL_SCALEDOWN_WINDOW_SECS,
     volumes={"/models": model_volume, "/cache/huggingface": hf_cache_volume},
     dispatch_token=DISPATCH_TOKEN,
-    runtime_config_loader=RuntimeConfig.from_env,
+    runtime_config_loader=load_runtime_config_from_env,
     logger_name="yume_modal_example.modal",
 )
 app = modal_bundle.app
@@ -181,7 +143,7 @@ def flash_attn_smoke() -> None:
 @app.function(
     image=download_image,
     volumes={"/models": model_volume},
-    secrets=[_env_secret("HF_TOKEN")],
+    secrets=[env_secret("HF_TOKEN")],
     timeout=60 * 60,
 )
 def download_model(

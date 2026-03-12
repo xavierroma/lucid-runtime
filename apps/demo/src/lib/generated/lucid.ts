@@ -2,9 +2,10 @@
 // Do not edit it by hand.
 
 export const lucidManifest = {
-  "actions": [
+  "inputs": [
     {
       "args_schema": {
+        "additionalProperties": false,
         "properties": {
           "prompt": {
             "minLength": 1,
@@ -15,88 +16,11 @@ export const lucidManifest = {
         "required": [
           "prompt"
         ],
-        "title": "SetPromptArgs",
+        "title": "SetPromptInputArgs",
         "type": "object"
       },
       "description": "Update the scene prompt used by Yume.",
-      "mode": "state",
       "name": "set_prompt"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Begin model generation for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.start"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Pause model stepping for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.pause"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Resume model stepping for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.resume"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "output": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "output",
-          "enabled"
-        ],
-        "type": "object"
-      },
-      "description": "Enable or disable a named output for the current session.",
-      "mode": "state",
-      "name": "lucid.runtime.set_output_enabled"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "max_rate_hz": {
-            "minimum": 0,
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "output": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "output",
-          "max_rate_hz"
-        ],
-        "type": "object"
-      },
-      "description": "Throttle a named output to a maximum publish rate in Hertz.",
-      "mode": "state",
-      "name": "lucid.runtime.set_output_rate"
     }
   ],
   "model": {
@@ -115,55 +39,71 @@ export const lucidManifest = {
   ]
 } as const
 
+export type HoldInputBinding = {
+  kind: "hold"
+  keys: string[]
+  mouse_buttons: number[]
+}
+
+export type PressInputBinding = {
+  kind: "press"
+  keys: string[]
+  mouse_buttons: number[]
+}
+
+export type AxisInputBinding = {
+  kind: "axis"
+  positive_keys: string[]
+  negative_keys: string[]
+}
+
+export type PointerInputBinding = {
+  kind: "pointer"
+  pointer_lock: boolean
+}
+
+export type WheelInputBinding = {
+  kind: "wheel"
+  step: number
+}
+
+export type InputBinding =
+  | HoldInputBinding
+  | PressInputBinding
+  | AxisInputBinding
+  | PointerInputBinding
+  | WheelInputBinding
+
 export interface SetPromptArgs {
   "prompt": string
 }
-export interface LucidRuntimeStartArgs {
-}
-export interface LucidRuntimePauseArgs {
-}
-export interface LucidRuntimeResumeArgs {
-}
-export interface LucidRuntimeSetOutputEnabledArgs {
-  "output": string
-  "enabled": boolean
-}
-export interface LucidRuntimeSetOutputRateArgs {
-  "output": string
-  "max_rate_hz": null | number
-}
 
-export interface ActionArgumentsByName {
+export interface InputArgumentsByName {
   "set_prompt": SetPromptArgs
-  "lucid.runtime.start": LucidRuntimeStartArgs
-  "lucid.runtime.pause": LucidRuntimePauseArgs
-  "lucid.runtime.resume": LucidRuntimeResumeArgs
-  "lucid.runtime.set_output_enabled": LucidRuntimeSetOutputEnabledArgs
-  "lucid.runtime.set_output_rate": LucidRuntimeSetOutputRateArgs
 }
 
-export type ActionName = "set_prompt" | "lucid.runtime.start" | "lucid.runtime.pause" | "lucid.runtime.resume" | "lucid.runtime.set_output_enabled" | "lucid.runtime.set_output_rate"
+export type InputName = "set_prompt"
 
-export interface ActionEnvelope<TName extends ActionName = ActionName> {
+export interface InputEnvelope<TName extends InputName = InputName> {
   type: "action"
   seq: number
   ts_ms: number
   session_id: string | null
   payload: {
     name: TName
-    args: ActionArgumentsByName[TName]
+    args: InputArgumentsByName[TName]
   }
 }
 
 const encoder = new TextEncoder()
 
-export function encodeActionMessage<TName extends ActionName>(args: {
+export function encodeInputMessage<TName extends InputName>(args: {
   name: TName
-  args: ActionArgumentsByName[TName]
+  args: InputArgumentsByName[TName]
   seq: number
   sessionId: string
 }) {
-  const envelope: ActionEnvelope<TName> = {
+  const envelope: InputEnvelope<TName> = {
     type: "action",
     seq: args.seq,
     ts_ms: Date.now(),

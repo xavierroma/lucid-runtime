@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react"
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+  type RefObject,
+} from "react"
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -12,41 +18,31 @@ import { ConnectionState, Track } from "livekit-client"
 import type { TrackReference } from "@livekit/components-react"
 
 import { demoEnv } from "@/lib/env"
-import type { Capabilities, SessionRecord } from "@/lib/coordinator"
-
-export interface QueuedLaunch {
-  nonce: number
-  prompt: string | null
-}
-
-export interface QueuedMouseMove {
-  nonce: number
-  dx: number
-  dy: number
-}
-
-export interface QueuedScroll {
-  nonce: number
-  amount: number
-}
+import type {
+  AxisInputBinding,
+  Capabilities,
+  HoldInputBinding,
+  ManifestInput,
+  PointerInputBinding,
+  PressInputBinding,
+  SessionRecord,
+  WheelInputBinding,
+} from "@/lib/coordinator"
 
 interface ConsoleRoomProps {
   session: SessionRecord | null
   token: string | null
   capabilities: Capabilities | null
-  queuedLaunch: QueuedLaunch | null
-  pressedButtonIds: number[]
-  queuedMouseMove: QueuedMouseMove | null
-  queuedScroll: QueuedScroll | null
+  promptValue: string | null
+  interactionTargetRef: RefObject<HTMLElement | null>
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
-  onLaunchSent: () => void
   onActionError: (message: string | null) => void
   onRoomError: (message: string | null) => void
 }
 
-interface ActionEnvelope {
+interface InputEnvelope {
   type: "action"
   seq: number
   ts_ms: number
@@ -57,15 +53,20 @@ interface ActionEnvelope {
   }
 }
 
+interface PointerAccumulator {
+  dx: number
+  dy: number
+}
+
 const encoder = new TextEncoder()
 
-function encodeActionMessage(args: {
+function encodeInputMessage(args: {
   name: string
   args: Record<string, unknown>
   seq: number
   sessionId: string
 }) {
-  const envelope: ActionEnvelope = {
+  const envelope: InputEnvelope = {
     type: "action",
     seq: args.seq,
     ts_ms: Date.now(),
@@ -78,18 +79,64 @@ function encodeActionMessage(args: {
   return encoder.encode(JSON.stringify(envelope))
 }
 
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+  return (
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "INPUT" ||
+    target.isContentEditable
+  )
+}
+
+function findPromptInput(inputs: ManifestInput[]) {
+  const named = inputs.find((input) => input.name === "set_prompt" && !input.binding)
+  if (named) {
+    return named
+  }
+
+  return inputs.find((input) => {
+    if (input.binding) {
+      return false
+    }
+    const properties =
+      ((input.args_schema.properties as Record<string, Record<string, unknown> | undefined>) ??
+        {}) as Record<string, Record<string, unknown> | undefined>
+    const promptSchema = properties.prompt
+    return (
+      Object.keys(properties).length === 1 &&
+      promptSchema?.type === "string"
+    )
+  })
+}
+
+function isHoldActive(
+  binding: HoldInputBinding,
+  pressedKeys: Set<string>,
+  pressedMouseButtons: Set<number>,
+) {
+  return (
+    binding.keys.some((key) => pressedKeys.has(key)) ||
+    binding.mouse_buttons.some((button) => pressedMouseButtons.has(button))
+  )
+}
+
+function computeAxisValue(binding: AxisInputBinding, pressedKeys: Set<string>) {
+  const positive = binding.positive_keys.some((key) => pressedKeys.has(key)) ? 1 : 0
+  const negative = binding.negative_keys.some((key) => pressedKeys.has(key)) ? 1 : 0
+  return positive - negative
+}
+
 export function ConsoleRoom({
   session,
   token,
   capabilities,
-  queuedLaunch,
-  pressedButtonIds,
-  queuedMouseMove,
-  queuedScroll,
+  promptValue,
+  interactionTargetRef,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
-  onLaunchSent,
   onActionError,
   onRoomError,
 }: ConsoleRoomProps) {
@@ -128,14 +175,11 @@ export function ConsoleRoom({
       <ConsoleRoomContent
         session={session}
         capabilities={capabilities}
-        queuedLaunch={queuedLaunch}
-        pressedButtonIds={pressedButtonIds}
-        queuedMouseMove={queuedMouseMove}
-        queuedScroll={queuedScroll}
+        promptValue={promptValue}
+        interactionTargetRef={interactionTargetRef}
         fallback={fallback}
         onConnectionChange={onConnectionChange}
         onTrackReadyChange={onTrackReadyChange}
-        onLaunchSent={onLaunchSent}
         onActionError={onActionError}
       />
     </LiveKitRoom>
@@ -145,28 +189,22 @@ export function ConsoleRoom({
 interface ConsoleRoomContentProps {
   session: SessionRecord
   capabilities: Capabilities
-  queuedLaunch: QueuedLaunch | null
-  pressedButtonIds: number[]
-  queuedMouseMove: QueuedMouseMove | null
-  queuedScroll: QueuedScroll | null
+  promptValue: string | null
+  interactionTargetRef: RefObject<HTMLElement | null>
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
   onTrackReadyChange: (ready: boolean) => void
-  onLaunchSent: () => void
   onActionError: (message: string | null) => void
 }
 
 function ConsoleRoomContent({
   session,
   capabilities,
-  queuedLaunch,
-  pressedButtonIds,
-  queuedMouseMove,
-  queuedScroll,
+  promptValue,
+  interactionTargetRef,
   fallback,
   onConnectionChange,
   onTrackReadyChange,
-  onLaunchSent,
   onActionError,
 }: ConsoleRoomContentProps) {
   const room = useRoomContext()
@@ -174,30 +212,63 @@ function ConsoleRoomContent({
   const cameraTracks = useTracks([Track.Source.Camera]) as TrackReference[]
   const { send } = useDataChannel(capabilities.control_topic)
   const actionSeqRef = useRef(0)
-  const lastLaunchNonceRef = useRef<number | null>(null)
-  const lastButtonsSignatureRef = useRef<string | null>(null)
-  const lastMouseMoveNonceRef = useRef<number | null>(null)
-  const lastScrollNonceRef = useRef<number | null>(null)
+  const lastPromptRef = useRef<string | null>(null)
+  const pressedKeysRef = useRef(new Set<string>())
+  const pressedMouseButtonsRef = useRef(new Set<number>())
+  const holdStateRef = useRef(new Map<string, boolean>())
+  const axisValueRef = useRef(new Map<string, number>())
+  const pointerAccumulatorRef = useRef(new Map<string, PointerAccumulator>())
+  const pointerFrameRef = useRef<number | null>(null)
+  const wheelAccumulatorRef = useRef(new Map<string, number>())
+  const wheelFrameRef = useRef<number | null>(null)
 
   const videoBinding = useMemo(
     () => capabilities.output_bindings.find((binding) => binding.kind === "video"),
     [capabilities.output_bindings],
   )
-  const supportsButtonState = useMemo(
-    () => capabilities.manifest.actions.some((action) => action.name === "set_buttons"),
-    [capabilities.manifest.actions],
+  const promptInput = useMemo(
+    () => findPromptInput(capabilities.manifest.inputs),
+    [capabilities.manifest.inputs],
   )
-  const supportsMouseMove = useMemo(
-    () => capabilities.manifest.actions.some((action) => action.name === "mouse_move"),
-    [capabilities.manifest.actions],
+  const holdInputs = useMemo(
+    () =>
+      capabilities.manifest.inputs.filter(
+        (input): input is ManifestInput & { binding: HoldInputBinding } =>
+          input.binding?.kind === "hold",
+      ),
+    [capabilities.manifest.inputs],
   )
-  const supportsScroll = useMemo(
-    () => capabilities.manifest.actions.some((action) => action.name === "scroll"),
-    [capabilities.manifest.actions],
+  const pressInputs = useMemo(
+    () =>
+      capabilities.manifest.inputs.filter(
+        (input): input is ManifestInput & { binding: PressInputBinding } =>
+          input.binding?.kind === "press",
+      ),
+    [capabilities.manifest.inputs],
   )
-  const supportsPromptState = useMemo(
-    () => capabilities.manifest.actions.some((action) => action.name === "set_prompt"),
-    [capabilities.manifest.actions],
+  const axisInputs = useMemo(
+    () =>
+      capabilities.manifest.inputs.filter(
+        (input): input is ManifestInput & { binding: AxisInputBinding } =>
+          input.binding?.kind === "axis",
+      ),
+    [capabilities.manifest.inputs],
+  )
+  const pointerInputs = useMemo(
+    () =>
+      capabilities.manifest.inputs.filter(
+        (input): input is ManifestInput & { binding: PointerInputBinding } =>
+          input.binding?.kind === "pointer",
+      ),
+    [capabilities.manifest.inputs],
+  )
+  const wheelInputs = useMemo(
+    () =>
+      capabilities.manifest.inputs.filter(
+        (input): input is ManifestInput & { binding: WheelInputBinding } =>
+          input.binding?.kind === "wheel",
+      ),
+    [capabilities.manifest.inputs],
   )
   const sessionAcceptsControlMessages =
     session.state === "READY" || session.state === "RUNNING"
@@ -218,6 +289,27 @@ function ConsoleRoomContent({
     )
   }, [cameraTracks, room.localParticipant.identity, videoBinding?.track_name])
 
+  const nextSequence = () => {
+    actionSeqRef.current += 1
+    return actionSeqRef.current
+  }
+
+  const sendInput = async (
+    name: string,
+    args: Record<string, unknown>,
+    reliable: boolean,
+  ) => {
+    await send(
+      encodeInputMessage({
+        name,
+        args,
+        seq: nextSequence(),
+        sessionId: session.session_id,
+      }),
+      { reliable },
+    )
+  }
+
   useEffect(() => {
     onConnectionChange(connectionState === ConnectionState.Connected)
   }, [connectionState, onConnectionChange])
@@ -228,84 +320,26 @@ function ConsoleRoomContent({
 
   useEffect(() => {
     actionSeqRef.current = 0
-    lastLaunchNonceRef.current = null
-    lastButtonsSignatureRef.current = null
-    lastMouseMoveNonceRef.current = null
-    lastScrollNonceRef.current = null
+    lastPromptRef.current = null
+    pressedKeysRef.current.clear()
+    pressedMouseButtonsRef.current.clear()
+    holdStateRef.current.clear()
+    axisValueRef.current.clear()
+    pointerAccumulatorRef.current.clear()
+    wheelAccumulatorRef.current.clear()
+    if (pointerFrameRef.current !== null) {
+      cancelAnimationFrame(pointerFrameRef.current)
+      pointerFrameRef.current = null
+    }
+    if (wheelFrameRef.current !== null) {
+      cancelAnimationFrame(wheelFrameRef.current)
+      wheelFrameRef.current = null
+    }
   }, [session.session_id])
 
   useEffect(() => {
-    if (!queuedLaunch) {
-      return
-    }
-    if (connectionState !== ConnectionState.Connected) {
-      return
-    }
-    if (session.state !== "READY") {
-      return
-    }
-    if (lastLaunchNonceRef.current === queuedLaunch.nonce) {
-      return
-    }
-
-    let cancelled = false
-
-    const publishLaunch = async () => {
-      try {
-        onActionError(null)
-
-        if (queuedLaunch.prompt && supportsPromptState) {
-          await send(
-            encodeActionMessage({
-              name: "set_prompt",
-              args: { prompt: queuedLaunch.prompt },
-              seq: actionSeqRef.current++,
-              sessionId: session.session_id,
-            }),
-            { reliable: true },
-          )
-        }
-
-        await send(
-          encodeActionMessage({
-            name: "lucid.runtime.start",
-            args: {},
-            seq: actionSeqRef.current++,
-            sessionId: session.session_id,
-          }),
-          { reliable: true },
-        )
-        if (!cancelled) {
-          lastLaunchNonceRef.current = queuedLaunch.nonce
-          onLaunchSent()
-        }
-      } catch (error) {
-        if (!cancelled) {
-          onActionError(
-            error instanceof Error ? error.message : "failed to publish launch",
-          )
-        }
-      }
-    }
-
-    void publishLaunch()
-
-    return () => {
-      cancelled = true
-    }
-  }, [
-    connectionState,
-    onActionError,
-    onLaunchSent,
-    queuedLaunch,
-    send,
-    session.state,
-    session.session_id,
-    supportsPromptState,
-  ])
-
-  useEffect(() => {
-    if (!supportsButtonState) {
+    const normalizedPrompt = promptValue?.trim() ?? ""
+    if (!promptInput || !normalizedPrompt) {
       return
     }
     if (connectionState !== ConnectionState.Connected) {
@@ -314,41 +348,29 @@ function ConsoleRoomContent({
     if (!sessionAcceptsControlMessages) {
       return
     }
-
-    const signature = JSON.stringify(pressedButtonIds)
-    if (lastButtonsSignatureRef.current === signature) {
+    if (lastPromptRef.current === normalizedPrompt) {
       return
     }
 
     let cancelled = false
 
-    const publishButtons = async () => {
+    const publishPrompt = async () => {
       try {
         onActionError(null)
-        await send(
-          encodeActionMessage({
-            name: "set_buttons",
-            args: {
-              buttons: pressedButtonIds,
-            },
-            seq: actionSeqRef.current++,
-            sessionId: session.session_id,
-          }),
-          { reliable: true },
-        )
+        await sendInput(promptInput.name, { prompt: normalizedPrompt }, true)
         if (!cancelled) {
-          lastButtonsSignatureRef.current = signature
+          lastPromptRef.current = normalizedPrompt
         }
       } catch (error) {
         if (!cancelled) {
           onActionError(
-            error instanceof Error ? error.message : "failed to publish button state",
+            error instanceof Error ? error.message : "failed to publish prompt",
           )
         }
       }
     }
 
-    void publishButtons()
+    void publishPrompt()
 
     return () => {
       cancelled = true
@@ -356,135 +378,366 @@ function ConsoleRoomContent({
   }, [
     connectionState,
     onActionError,
-    pressedButtonIds,
-    send,
-    session.state,
-    session.session_id,
+    promptInput,
+    promptValue,
     sessionAcceptsControlMessages,
-    supportsButtonState,
+    session.session_id,
   ])
 
   useEffect(() => {
-    if (!queuedMouseMove) {
-      return
-    }
-    if (!supportsMouseMove) {
-      return
-    }
     if (connectionState !== ConnectionState.Connected) {
       return
     }
     if (!sessionAcceptsControlMessages) {
       return
     }
-    if (lastMouseMoveNonceRef.current === queuedMouseMove.nonce) {
-      return
+
+    const target = interactionTargetRef.current
+    const hasMouseBindings =
+      pointerInputs.length > 0 ||
+      wheelInputs.length > 0 ||
+      holdInputs.some((input) => input.binding.mouse_buttons.length > 0) ||
+      pressInputs.some((input) => input.binding.mouse_buttons.length > 0)
+    const hasKeyboardBindings =
+      holdInputs.some((input) => input.binding.keys.length > 0) ||
+      pressInputs.some((input) => input.binding.keys.length > 0) ||
+      axisInputs.length > 0
+
+    const flushPointerInputs = () => {
+      pointerFrameRef.current = null
+      const pending = Array.from(pointerAccumulatorRef.current.entries())
+      pointerAccumulatorRef.current.clear()
+      if (!pending.length) {
+        return
+      }
+      void (async () => {
+        try {
+          onActionError(null)
+          await Promise.all(
+            pending.map(([name, delta]) =>
+              sendInput(name, { dx: delta.dx, dy: delta.dy }, false),
+            ),
+          )
+        } catch (error) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish pointer input",
+          )
+        }
+      })()
     }
 
-    let cancelled = false
+    const queuePointerDelta = (name: string, dx: number, dy: number) => {
+      const current = pointerAccumulatorRef.current.get(name) ?? { dx: 0, dy: 0 }
+      current.dx += dx
+      current.dy += dy
+      pointerAccumulatorRef.current.set(name, current)
+      if (pointerFrameRef.current === null) {
+        pointerFrameRef.current = requestAnimationFrame(flushPointerInputs)
+      }
+    }
 
-    const publishMouseMove = async () => {
-      try {
-        onActionError(null)
-        await send(
-          encodeActionMessage({
-            name: "mouse_move",
-            args: {
-              dx: queuedMouseMove.dx,
-              dy: queuedMouseMove.dy,
-            },
-            seq: actionSeqRef.current++,
-            sessionId: session.session_id,
-          }),
-          { reliable: false },
-        )
-        if (!cancelled) {
-          lastMouseMoveNonceRef.current = queuedMouseMove.nonce
-        }
-      } catch (error) {
-        if (!cancelled) {
-          onActionError(
-            error instanceof Error ? error.message : "failed to publish mouse movement",
+    const flushWheelInputs = () => {
+      wheelFrameRef.current = null
+      const pending = Array.from(wheelAccumulatorRef.current.entries())
+      wheelAccumulatorRef.current.clear()
+      if (!pending.length) {
+        return
+      }
+      void (async () => {
+        try {
+          onActionError(null)
+          await Promise.all(
+            pending.map(([name, delta]) => sendInput(name, { delta }, false)),
           )
+        } catch (error) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish wheel input",
+          )
+        }
+      })()
+    }
+
+    const queueWheelDelta = (name: string, delta: number) => {
+      wheelAccumulatorRef.current.set(
+        name,
+        (wheelAccumulatorRef.current.get(name) ?? 0) + delta,
+      )
+      if (wheelFrameRef.current === null) {
+        wheelFrameRef.current = requestAnimationFrame(flushWheelInputs)
+      }
+    }
+
+    const publishHoldState = (input: ManifestInput & { binding: HoldInputBinding }) => {
+      const pressed = isHoldActive(
+        input.binding,
+        pressedKeysRef.current,
+        pressedMouseButtonsRef.current,
+      )
+      if (holdStateRef.current.get(input.name) === pressed) {
+        return
+      }
+      holdStateRef.current.set(input.name, pressed)
+      void (async () => {
+        try {
+          onActionError(null)
+          await sendInput(input.name, { pressed }, true)
+        } catch (error) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish hold input",
+          )
+        }
+      })()
+    }
+
+    const publishAxisState = (input: ManifestInput & { binding: AxisInputBinding }) => {
+      const value = computeAxisValue(input.binding, pressedKeysRef.current)
+      if (axisValueRef.current.get(input.name) === value) {
+        return
+      }
+      axisValueRef.current.set(input.name, value)
+      void (async () => {
+        try {
+          onActionError(null)
+          await sendInput(input.name, { value }, true)
+        } catch (error) {
+          onActionError(
+            error instanceof Error ? error.message : "failed to publish axis input",
+          )
+        }
+      })()
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!hasKeyboardBindings || isEditableTarget(event.target)) {
+        return
+      }
+      if (pressedKeysRef.current.has(event.code)) {
+        return
+      }
+
+      let consumed = false
+      pressedKeysRef.current.add(event.code)
+
+      for (const input of holdInputs) {
+        if (input.binding.keys.includes(event.code)) {
+          consumed = true
+          publishHoldState(input)
+        }
+      }
+
+      for (const input of pressInputs) {
+        if (!input.binding.keys.includes(event.code)) {
+          continue
+        }
+        consumed = true
+        void (async () => {
+          try {
+            onActionError(null)
+            await sendInput(input.name, {}, true)
+          } catch (error) {
+            onActionError(
+              error instanceof Error ? error.message : "failed to publish press input",
+            )
+          }
+        })()
+      }
+
+      for (const input of axisInputs) {
+        if (
+          input.binding.positive_keys.includes(event.code) ||
+          input.binding.negative_keys.includes(event.code)
+        ) {
+          consumed = true
+          publishAxisState(input)
+        }
+      }
+
+      if (consumed) {
+        event.preventDefault()
+      }
+    }
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (!hasKeyboardBindings) {
+        return
+      }
+      if (!pressedKeysRef.current.delete(event.code)) {
+        return
+      }
+
+      let consumed = false
+      for (const input of holdInputs) {
+        if (input.binding.keys.includes(event.code)) {
+          consumed = true
+          publishHoldState(input)
+        }
+      }
+
+      for (const input of axisInputs) {
+        if (
+          input.binding.positive_keys.includes(event.code) ||
+          input.binding.negative_keys.includes(event.code)
+        ) {
+          consumed = true
+          publishAxisState(input)
+        }
+      }
+
+      if (consumed) {
+        event.preventDefault()
+      }
+    }
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (!hasMouseBindings || !target || !target.contains(event.target as Node | null)) {
+        return
+      }
+
+      let consumed = false
+      if (!pressedMouseButtonsRef.current.has(event.button)) {
+        pressedMouseButtonsRef.current.add(event.button)
+      }
+
+      for (const input of holdInputs) {
+        if (input.binding.mouse_buttons.includes(event.button)) {
+          consumed = true
+          publishHoldState(input)
+        }
+      }
+
+      for (const input of pressInputs) {
+        if (!input.binding.mouse_buttons.includes(event.button)) {
+          continue
+        }
+        consumed = true
+        void (async () => {
+          try {
+            onActionError(null)
+            await sendInput(input.name, {}, true)
+          } catch (error) {
+            onActionError(
+              error instanceof Error ? error.message : "failed to publish press input",
+            )
+          }
+        })()
+      }
+
+      const pointerLockInput = pointerInputs.find((input) => input.binding.pointer_lock)
+      if (pointerLockInput && document.pointerLockElement !== target) {
+        consumed = true
+        void target.requestPointerLock()
+      }
+
+      if (consumed) {
+        event.preventDefault()
+      }
+    }
+
+    const handleMouseUp = (event: MouseEvent) => {
+      if (!hasMouseBindings) {
+        return
+      }
+      if (!pressedMouseButtonsRef.current.delete(event.button)) {
+        return
+      }
+      for (const input of holdInputs) {
+        if (input.binding.mouse_buttons.includes(event.button)) {
+          publishHoldState(input)
         }
       }
     }
 
-    void publishMouseMove()
-
-    return () => {
-      cancelled = true
-    }
-  }, [
-    connectionState,
-    onActionError,
-    queuedMouseMove,
-    send,
-    session.state,
-    session.session_id,
-    sessionAcceptsControlMessages,
-    supportsMouseMove,
-  ])
-
-  useEffect(() => {
-    if (!queuedScroll) {
-      return
-    }
-    if (!supportsScroll) {
-      return
-    }
-    if (connectionState !== ConnectionState.Connected) {
-      return
-    }
-    if (!sessionAcceptsControlMessages) {
-      return
-    }
-    if (lastScrollNonceRef.current === queuedScroll.nonce) {
-      return
-    }
-
-    let cancelled = false
-
-    const publishScroll = async () => {
-      try {
-        onActionError(null)
-        await send(
-          encodeActionMessage({
-            name: "scroll",
-            args: {
-              amount: queuedScroll.amount,
-            },
-            seq: actionSeqRef.current++,
-            sessionId: session.session_id,
-          }),
-          { reliable: false },
-        )
-        if (!cancelled) {
-          lastScrollNonceRef.current = queuedScroll.nonce
+    const handleMouseMove = (event: MouseEvent) => {
+      if (!pointerInputs.length || !target) {
+        return
+      }
+      for (const input of pointerInputs) {
+        const isActive = input.binding.pointer_lock
+          ? document.pointerLockElement === target
+          : target.contains(event.target as Node | null)
+        if (!isActive) {
+          continue
         }
-      } catch (error) {
-        if (!cancelled) {
-          onActionError(
-            error instanceof Error ? error.message : "failed to publish scroll input",
-          )
+        if (event.movementX === 0 && event.movementY === 0) {
+          continue
         }
+        queuePointerDelta(input.name, event.movementX, event.movementY)
       }
     }
 
-    void publishScroll()
+    const handleWheel = (event: WheelEvent) => {
+      if (!wheelInputs.length || !target || !target.contains(event.target as Node | null)) {
+        return
+      }
+      if (event.deltaY === 0) {
+        return
+      }
+      event.preventDefault()
+      for (const input of wheelInputs) {
+        queueWheelDelta(
+          input.name,
+          event.deltaY < 0 ? input.binding.step : -input.binding.step,
+        )
+      }
+    }
+
+    const handleContextMenu = (event: MouseEvent) => {
+      if (!target || !target.contains(event.target as Node | null)) {
+        return
+      }
+      if (hasMouseBindings) {
+        event.preventDefault()
+      }
+    }
+
+    if (hasKeyboardBindings) {
+      window.addEventListener("keydown", handleKeyDown)
+      window.addEventListener("keyup", handleKeyUp)
+    }
+    if (hasMouseBindings) {
+      document.addEventListener("mousedown", handleMouseDown)
+      document.addEventListener("mouseup", handleMouseUp)
+      document.addEventListener("mousemove", handleMouseMove)
+      document.addEventListener("wheel", handleWheel, { passive: false })
+      document.addEventListener("contextmenu", handleContextMenu)
+    }
 
     return () => {
-      cancelled = true
+      if (pointerFrameRef.current !== null) {
+        cancelAnimationFrame(pointerFrameRef.current)
+        pointerFrameRef.current = null
+      }
+      if (wheelFrameRef.current !== null) {
+        cancelAnimationFrame(wheelFrameRef.current)
+        wheelFrameRef.current = null
+      }
+      pointerAccumulatorRef.current.clear()
+      wheelAccumulatorRef.current.clear()
+
+      if (hasKeyboardBindings) {
+        window.removeEventListener("keydown", handleKeyDown)
+        window.removeEventListener("keyup", handleKeyUp)
+      }
+      if (hasMouseBindings) {
+        document.removeEventListener("mousedown", handleMouseDown)
+        document.removeEventListener("mouseup", handleMouseUp)
+        document.removeEventListener("mousemove", handleMouseMove)
+        document.removeEventListener("wheel", handleWheel)
+        document.removeEventListener("contextmenu", handleContextMenu)
+      }
     }
   }, [
+    axisInputs,
     connectionState,
+    holdInputs,
+    interactionTargetRef,
     onActionError,
-    queuedScroll,
+    pointerInputs,
+    pressInputs,
     send,
-    session.state,
     session.session_id,
     sessionAcceptsControlMessages,
-    supportsScroll,
+    wheelInputs,
   ])
 
   if (!remoteTrack) {

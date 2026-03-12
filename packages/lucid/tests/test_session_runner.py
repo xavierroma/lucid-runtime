@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
 import numpy as np
-from pydantic import BaseModel
 import pytest
 
-from lucid import SessionContext
+from lucid import SessionContext, publish
 from lucid.publish import OutputSpec
 
 from lucid.config import RuntimeConfig, SessionConfig
@@ -62,52 +62,101 @@ class StubLiveKitAdapter:
         self.status_messages.append(payload)
 
 
-class _PromptState(BaseModel):
-    prompt: str
+class _StubSession:
+    def __init__(
+        self,
+        runtime: "StubRuntime",
+        ctx: SessionContext,
+    ) -> None:
+        self.runtime = runtime
+        self.ctx = ctx
+        self.prompt = "default prompt"
+        self.run_calls = 0
+        self.close_calls = 0
 
+    async def run(self) -> None:
+        self.run_calls += 1
+        if self.runtime.read_prompt_delay_s > 0:
+            await asyncio.sleep(self.runtime.read_prompt_delay_s)
+        self.runtime.observed_prompts.append(self.prompt)
+        if self.runtime.block_until_stopped:
+            while self.ctx.running:
+                await asyncio.sleep(0.01)
+        self.ctx.running = False
 
-class StubModel:
-    def __init__(self) -> None:
-        self.start_calls = 0
-        self.start_prompts: list[str | None] = []
-        self.end_calls = 0
-
-    async def start_session(self, ctx: SessionContext) -> None:
-        self.start_calls += 1
-        prompt_state = ctx.state.get("set_prompt")
-        self.start_prompts.append(
-            None if prompt_state is None else str(prompt_state.prompt)
-        )
-        ctx.running = False
-
-    async def end_session(self, _ctx: SessionContext) -> None:
-        self.end_calls += 1
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.runtime.close_calls += 1
 
 
 class StubRuntime:
-    def __init__(self) -> None:
-        self.definition = type("Definition", (), {"name": "stub"})()
-        self.model = StubModel()
-        self.outputs: tuple[OutputSpec, ...] = ()
+    def __init__(
+        self,
+        *,
+        outputs: tuple[OutputSpec, ...] = (),
+        read_prompt_delay_s: float = 0.0,
+        block_until_stopped: bool = False,
+    ) -> None:
+        self.definition = type(
+            "Definition",
+            (),
+            {
+                "name": "stub",
+                "inputs": (type("InputDefinition", (), {"binding": None})(),),
+            },
+        )()
+        self.outputs = outputs
+        self.read_prompt_delay_s = read_prompt_delay_s
+        self.block_until_stopped = block_until_stopped
+        self.observed_prompts: list[str] = []
+        self.close_calls = 0
+        self.sessions: dict[str, _StubSession] = {}
 
     async def load(self) -> None:
         return None
 
+    async def unload(self) -> None:
+        return None
+
     def manifest(self) -> dict[str, object]:
-        return {"model": {"name": "stub"}, "actions": [], "outputs": []}
+        return {
+            "model": {"name": "stub"},
+            "inputs": [
+                {
+                    "name": "set_prompt",
+                    "description": "Update prompt",
+                    "args_schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {"prompt": {"type": "string"}},
+                        "required": ["prompt"],
+                    },
+                }
+            ],
+            "outputs": [output.to_manifest() for output in self.outputs],
+        }
 
     def output_bindings(self) -> list[dict[str, object]]:
-        return []
+        bindings: list[dict[str, object]] = []
+        for output in self.outputs:
+            bindings.append(
+                {
+                    "name": output.name,
+                    "kind": output.kind,
+                    "track_name": output.name,
+                }
+            )
+        return bindings
 
     def create_session_context(
         self,
         *,
         session_id: str,
         room_name: str,
-        publish_fn,
+        publish_fn: Callable[[str, Any, int | None], Awaitable[None]],
         metrics_fn=None,
     ) -> SessionContext:
-        return SessionContext(
+        ctx = SessionContext(
             session_id=session_id,
             room_name=room_name,
             outputs=self.outputs,
@@ -115,41 +164,47 @@ class StubRuntime:
             metrics_fn=metrics_fn,
             logger=logging.getLogger("tests.session_runner.stub_runtime"),
         )
+        self.sessions[session_id] = _StubSession(self, ctx)
+        return ctx
 
-    async def dispatch_action(self, ctx: SessionContext, name: str, args: dict[str, Any]) -> None:
-        if name == "set_prompt":
-            ctx.state.set(name, _PromptState.model_validate(args))
-            return
-        if name == "lucid.runtime.start":
-            ctx.mark_started()
-            return
-        if name == "lucid.runtime.pause":
-            if ctx.started:
-                ctx.paused = True
-            return
-        if name == "lucid.runtime.resume":
-            if ctx.started:
-                ctx.paused = False
-            return
-        raise RuntimeError(f"unexpected action: {name}")
+    async def dispatch_input(self, ctx: SessionContext, name: str, args: dict[str, Any]) -> None:
+        if name != "set_prompt":
+            raise RuntimeError(f"unexpected input: {name}")
+        prompt = args.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise RuntimeError("prompt is required")
+        self.sessions[ctx.session_id].prompt = prompt
+
+    async def run_session(self, ctx: SessionContext) -> None:
+        await self.sessions[ctx.session_id].run()
+
+    async def close_session(self, ctx: SessionContext) -> None:
+        session = self.sessions.pop(ctx.session_id, None)
+        if session is not None:
+            await session.close()
 
 
-@pytest.fixture
-def worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("COORDINATOR_BASE_URL", "http://coordinator")
-    monkeypatch.setenv("WORKER_INTERNAL_TOKEN", "test-token")
-    monkeypatch.setenv("LIVEKIT_URL", "wss://example.livekit.invalid")
-    monkeypatch.setenv("WM_ENGINE", "fake")
-    monkeypatch.setenv("WM_LIVEKIT_MODE", "fake")
-    monkeypatch.setenv("YUME_MODEL_DIR", "/tmp/yume-model")
-    monkeypatch.setenv("YUME_CHUNK_FRAMES", "1")
-    monkeypatch.setenv("WM_MAX_QUEUE_FRAMES", "8")
-    monkeypatch.setenv("WM_FRAME_WIDTH", "64")
-    monkeypatch.setenv("WM_FRAME_HEIGHT", "64")
+def _runtime_config() -> RuntimeConfig:
+    return RuntimeConfig(
+        livekit_url="wss://example.livekit.invalid",
+        frame_width=64,
+        frame_height=64,
+        max_queue_frames=8,
+        livekit_mode="fake",
+    )
+
+
+def _session_config() -> SessionConfig:
+    return SessionConfig(
+        worker_id="wm-worker-test",
+        coordinator_base_url="http://coordinator",
+        worker_internal_token="test-token",
+    )
 
 
 @pytest.mark.asyncio
-async def test_session_runner_reaches_ready_without_starting_model(worker_env: None) -> None:
+async def test_session_runner_runs_session_after_input_grace_and_marks_running(
+) -> None:
     calls: list[tuple[str, dict[str, Any] | None]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -165,18 +220,13 @@ async def test_session_runner_reaches_ready_without_starting_model(worker_env: N
         worker_internal_token="test-token",
         transport=transport,
     )
-    runtime_config = RuntimeConfig.from_env()
-    session_config = SessionConfig.from_env(worker_id_override="wm-worker-test")
     runtime = StubRuntime()
-    end_message = (
-        b'{"type":"end","seq":1,"ts_ms":10,'
-        b'"session_id":"session-1","payload":{}}'
-    )
-    adapter = StubLiveKitAdapter(control_messages=[end_message])
+    adapter = StubLiveKitAdapter()
     runner = SessionRunner(
-        runtime_config,
-        session_config,
+        _runtime_config(),
+        _session_config(),
         logging.getLogger("tests.session_runner"),
+        model="yume_modal_example.model:YumeLucidModel",
         coordinator=coordinator,
         livekit_factory=lambda: adapter,
         runtime=runtime,
@@ -194,18 +244,17 @@ async def test_session_runner_reaches_ready_without_starting_model(worker_env: N
 
     paths = [path for path, _ in calls]
     assert paths[0] == "/internal/sessions/session-1/ready"
-    assert "/internal/sessions/session-1/running" not in paths
+    assert "/internal/sessions/session-1/running" in paths
     assert paths[-1] == "/internal/sessions/session-1/ended"
-    assert calls[-1][1] == {"end_reason": "CONTROL_REQUESTED"}
-    assert runtime.model.start_calls == 0
-    assert runtime.model.end_calls == 1
+    assert calls[-1][1] == {}
+    assert runtime.observed_prompts == ["default prompt"]
+    assert runtime.close_calls == 1
     assert any(b'"type":"started"' in status for status in adapter.status_messages)
     assert any(b'"type":"ended"' in status for status in adapter.status_messages)
-    assert [output.name for output in adapter.outputs] == []
 
 
 @pytest.mark.asyncio
-async def test_session_runner_applies_prestart_prompt_before_running(worker_env: None) -> None:
+async def test_session_runner_applies_inputs_before_session_starts() -> None:
     calls: list[tuple[str, dict[str, Any] | None]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -221,21 +270,18 @@ async def test_session_runner_applies_prestart_prompt_before_running(worker_env:
         worker_internal_token="test-token",
         transport=transport,
     )
-    runtime = StubRuntime()
+    runtime = StubRuntime(read_prompt_delay_s=0.0)
     prompt_message = (
         b'{"type":"action","seq":1,"ts_ms":10,"session_id":"session-3",'
         b'"payload":{"name":"set_prompt","args":{"prompt":"new prompt"}}}'
     )
-    start_message = (
-        b'{"type":"action","seq":2,"ts_ms":11,"session_id":"session-3",'
-        b'"payload":{"name":"lucid.runtime.start","args":{}}}'
-    )
     runner = SessionRunner(
-        RuntimeConfig.from_env(),
-        SessionConfig.from_env(worker_id_override="wm-worker-test"),
+        _runtime_config(),
+        _session_config(),
         logging.getLogger("tests.session_runner"),
+        model="yume_modal_example.model:YumeLucidModel",
         coordinator=coordinator,
-        livekit_factory=lambda: StubLiveKitAdapter(control_messages=[prompt_message, start_message]),
+        livekit_factory=lambda: StubLiveKitAdapter(control_messages=[prompt_message]),
         runtime=runtime,
     )
 
@@ -249,8 +295,7 @@ async def test_session_runner_applies_prestart_prompt_before_running(worker_env:
     )
     await runner.close()
 
-    assert runtime.model.start_calls == 1
-    assert runtime.model.start_prompts == ["new prompt"]
+    assert runtime.observed_prompts == ["new prompt"]
     paths = [path for path, _ in calls]
     ready_index = paths.index("/internal/sessions/session-3/ready")
     running_index = paths.index("/internal/sessions/session-3/running")
@@ -259,7 +304,7 @@ async def test_session_runner_applies_prestart_prompt_before_running(worker_env:
 
 
 @pytest.mark.asyncio
-async def test_session_runner_reports_error_when_connect_fails(worker_env: None) -> None:
+async def test_session_runner_ends_when_control_requests_stop() -> None:
     ended_payloads: list[dict[str, Any] | None] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -276,20 +321,69 @@ async def test_session_runner_reports_error_when_connect_fails(worker_env: None)
         worker_internal_token="test-token",
         transport=transport,
     )
-    runtime_config = RuntimeConfig.from_env()
-    session_config = SessionConfig.from_env(worker_id_override="wm-worker-test")
+    runtime = StubRuntime(block_until_stopped=True)
+    end_message = (
+        b'{"type":"end","seq":1,"ts_ms":10,'
+        b'"session_id":"session-2","payload":{}}'
+    )
     runner = SessionRunner(
-        runtime_config,
-        session_config,
+        _runtime_config(),
+        _session_config(),
         logging.getLogger("tests.session_runner"),
+        model="yume_modal_example.model:YumeLucidModel",
+        coordinator=coordinator,
+        livekit_factory=lambda: StubLiveKitAdapter(control_messages=[end_message]),
+        runtime=runtime,
+    )
+
+    result = await runner.run_session(
+        Assignment(
+            session_id="session-2",
+            room_name="wm-session-2",
+            worker_access_token="worker-token",
+            control_topic="wm.control",
+        )
+    )
+    await runner.close()
+
+    assert result.ended_by_control is True
+    assert result.error_code is None
+    assert ended_payloads == [{"end_reason": "CONTROL_REQUESTED"}]
+    assert runtime.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_session_runner_reports_error_when_connect_fails() -> None:
+    ended_payloads: list[dict[str, Any] | None] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = None
+        if request.content:
+            body = json.loads(request.content.decode("utf-8"))
+        if request.url.path.endswith("/ended"):
+            ended_payloads.append(body)
+        return httpx.Response(200, json={"status": "ok"})
+
+    transport = httpx.MockTransport(handler)
+    coordinator = CoordinatorClient(
+        base_url="http://coordinator",
+        worker_internal_token="test-token",
+        transport=transport,
+    )
+    runner = SessionRunner(
+        _runtime_config(),
+        _session_config(),
+        logging.getLogger("tests.session_runner"),
+        model="yume_modal_example.model:YumeLucidModel",
         coordinator=coordinator,
         livekit_factory=lambda: StubLiveKitAdapter(fail_connect=True),
+        runtime=StubRuntime(),
     )
 
     await runner.run_session(
         Assignment(
-            session_id="session-2",
-            room_name="wm-session-2",
+            session_id="session-4",
+            room_name="wm-session-4",
             worker_access_token="worker-token",
             control_topic="wm.control",
         )
@@ -304,15 +398,21 @@ async def test_session_runner_reports_error_when_connect_fails(worker_env: None)
 
 
 @pytest.mark.asyncio
-async def test_session_runner_exposes_manifest_and_output_bindings(worker_env: None) -> None:
+async def test_session_runner_exposes_manifest_and_output_bindings() -> None:
+    runtime = StubRuntime(
+        outputs=(publish.video(name="main_video", width=64, height=64, fps=8),)
+    )
     runner = SessionRunner(
-        RuntimeConfig.from_env(),
-        SessionConfig.from_env(worker_id_override="wm-worker-test"),
+        _runtime_config(),
+        _session_config(),
         logging.getLogger("tests.session_runner"),
+        model="yume_modal_example.model:YumeLucidModel",
         livekit_factory=lambda: StubLiveKitAdapter(),
+        runtime=runtime,
     )
 
-    assert runner.manifest["model"]["name"] == "yume"
+    assert runner.manifest["model"]["name"] == "stub"
+    assert runner.manifest["inputs"][0]["name"] == "set_prompt"
     assert runner.output_bindings == [
         {"name": "main_video", "kind": "video", "track_name": "main_video"}
     ]

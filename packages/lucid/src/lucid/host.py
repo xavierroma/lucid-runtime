@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from time import perf_counter
@@ -11,7 +10,7 @@ from typing import Any
 
 from .config import RuntimeConfig, SessionConfig
 from .coordinator import CoordinatorClient
-from .discovery import build_model_runtime_config, ensure_model_module_loaded
+from .discovery import ModelTarget
 from .livekit import (
     FakeLiveKitAdapter,
     LiveKitAdapter,
@@ -32,6 +31,7 @@ class SessionLifecycleHooks:
 
 class SessionRunner:
     HEARTBEAT_INTERVAL_SECS = 2.0
+    INITIAL_INPUT_GRACE_SECS = 0.5
 
     def __init__(
         self,
@@ -39,13 +39,16 @@ class SessionRunner:
         session_config: SessionConfig | None,
         logger: logging.Logger,
         *,
+        model: ModelTarget,
+        model_config: Any | None = None,
         runtime_config: Any | None = None,
         coordinator: CoordinatorClient | None = None,
         livekit_factory: Callable[[], LiveKitAdapter] | None = None,
         lifecycle_hooks: SessionLifecycleHooks | None = None,
         runtime: LucidRuntime | None = None,
     ) -> None:
-        ensure_model_module_loaded()
+        self._model = model
+        self._model_config = model_config
         self._host_config = host_config
         self._session_config = session_config
         self._logger = logger
@@ -55,12 +58,14 @@ class SessionRunner:
                 base_url=session_config.coordinator_base_url,
                 worker_internal_token=session_config.worker_internal_token,
             )
-        self._runtime_config = runtime_config or build_model_runtime_config(host_config)
-        self._runtime = runtime or LucidRuntime.load_selected(
+        self._runtime_config = runtime_config or host_config
+        self._runtime = runtime or LucidRuntime.load_model(
             runtime_config=self._runtime_config,
             logger=logger,
-            model_name=os.getenv("WM_MODEL_NAME", "").strip() or None,
+            model=model,
+            config=model_config,
         )
+        self._owns_runtime = runtime is None
         self._livekit_factory = livekit_factory
         self._lifecycle_hooks = lifecycle_hooks or SessionLifecycleHooks()
         self._session_stop_event = asyncio.Event()
@@ -99,6 +104,8 @@ class SessionRunner:
     async def close(self) -> None:
         if self._coordinator is not None:
             await self._coordinator.close()
+        if self._owns_runtime:
+            await self._runtime.unload()
 
     def stop(self) -> None:
         if self._active_session_ctx is not None:
@@ -241,7 +248,7 @@ class SessionRunner:
         finally:
             session_ctx.running = False
             self._active_session_ctx = None
-            await self._runtime.model.end_session(session_ctx)
+            await self._runtime.close_session(session_ctx)
             self._logger.info(
                 "session_runner.run_session model_session_ended elapsed_ms=%.1f session_id=%s error_code=%s",
                 (perf_counter() - start) * 1000.0,
@@ -357,18 +364,51 @@ class SessionRunner:
                 await status.pong(outcome.pong_payload)
 
     async def _model_loop(self, *, session_ctx) -> None:
-        await session_ctx.wait_until_started()
-        if not session_ctx.running:
-            self._session_stop_event.set()
+        initial_inputs_received = await self._wait_for_initial_input_barrier(session_ctx)
+        if not session_ctx.running or self._session_stop_event.is_set():
             return
+        if self._requires_initial_input_barrier():
+            self._logger.info(
+                "session_runner._model_loop initial_input_barrier elapsed outcome=%s session_id=%s",
+                "input_received" if initial_inputs_received else "timeout",
+                session_ctx.session_id,
+            )
         if self._coordinator is not None:
             await self._coordinator.mark_running(session_ctx.session_id)
         await self._emit_lifecycle_hook(
             self._lifecycle_hooks.on_running,
             session_ctx.session_id,
         )
-        await self._runtime.model.start_session(session_ctx)
+        await self._runtime.run_session(session_ctx)
         self._session_stop_event.set()
+
+    async def _wait_for_initial_input_barrier(self, session_ctx) -> bool:
+        if not self._requires_initial_input_barrier():
+            return False
+
+        wait_task = asyncio.create_task(
+            session_ctx.wait_for_initial_input(self.INITIAL_INPUT_GRACE_SECS),
+            name="initial_input_barrier",
+        )
+        stop_task = asyncio.create_task(
+            self._session_stop_event.wait(),
+            name="initial_input_barrier_stop",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                [wait_task, stop_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if stop_task in done:
+                return False
+            return bool(wait_task.result())
+        finally:
+            wait_task.cancel()
+            stop_task.cancel()
+            await asyncio.gather(wait_task, stop_task, return_exceptions=True)
+
+    def _requires_initial_input_barrier(self) -> bool:
+        return any(definition.binding is None for definition in self._runtime.definition.inputs)
 
     @staticmethod
     async def _emit_lifecycle_hook(

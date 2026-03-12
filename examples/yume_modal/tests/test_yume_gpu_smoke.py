@@ -7,8 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lucid.config import RuntimeConfig
-from yume_modal_example.config import build_runtime_config
+from yume_modal_example.config import YumeRuntimeConfig
 from yume_modal_example.engine import YumeEngine
 
 
@@ -32,18 +31,13 @@ async def test_yume_gpu_smoke_real_model(monkeypatch: pytest.MonkeyPatch) -> Non
     if not model_path.exists():
         pytest.skip(f"model directory does not exist: {model_path}")
 
-    monkeypatch.setenv("COORDINATOR_BASE_URL", "http://localhost:8080")
-    monkeypatch.setenv("WORKER_INTERNAL_TOKEN", "test-token")
-    monkeypatch.setenv("LIVEKIT_URL", "wss://example.livekit.invalid")
     monkeypatch.setenv("WM_ENGINE", "yume")
-    monkeypatch.setenv("WM_LIVEKIT_MODE", "fake")
     monkeypatch.setenv("YUME_MODEL_DIR", str(model_path))
     monkeypatch.setenv("YUME_CHUNK_FRAMES", "2")
     monkeypatch.setenv("WM_FRAME_WIDTH", "1280")
     monkeypatch.setenv("WM_FRAME_HEIGHT", "704")
 
-    host_config = RuntimeConfig.from_env()
-    config = build_runtime_config(host_config)
+    config = YumeRuntimeConfig.from_env()
     engine = YumeEngine(config, logging.getLogger("tests.yume_gpu_smoke"))
 
     await engine.load()

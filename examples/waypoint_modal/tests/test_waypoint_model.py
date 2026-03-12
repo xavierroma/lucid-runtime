@@ -2,26 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
 import types
 
 import numpy as np
-from pydantic import BaseModel, Field, ValidationError
 import pytest
 
-from lucid import SessionContext
+from lucid import LoadContext, SessionContext, build_model_definition
 
 from waypoint_modal_example.config import WaypointRuntimeConfig
 from waypoint_modal_example.engine import WaypointControlState, WaypointEngine
 from waypoint_modal_example.model import WaypointLucidModel
-
-
-class _PromptState(BaseModel):
-    prompt: str
-
-
-class _ButtonsState(BaseModel):
-    buttons: list[int] = Field(default_factory=list)
 
 
 class _StubEngine:
@@ -46,7 +36,7 @@ class _StubEngine:
     async def generate_frame(self, controls: WaypointControlState) -> tuple[np.ndarray, float]:
         self.controls.append(controls)
         fill = 200 if self.prompt == "new prompt" else 10
-        frame = np.full((4, 4, 3), fill, dtype=np.uint8)
+        frame = np.full((360, 640, 3), fill, dtype=np.uint8)
         return frame, 5.0
 
     async def end_session(self) -> None:
@@ -55,13 +45,9 @@ class _StubEngine:
 
 def _runtime_config(*, warmup_on_load: bool = False) -> WaypointRuntimeConfig:
     return WaypointRuntimeConfig(
-        livekit_url="wss://example.livekit.invalid",
-        frame_width=4,
-        frame_height=4,
+        frame_width=640,
+        frame_height=360,
         target_fps=100,
-        status_topic="wm.status",
-        max_queue_frames=4,
-        livekit_mode="fake",
         wm_engine="waypoint",
         waypoint_model_source="/models/Waypoint-1.1-Small",
         waypoint_ae_source="/models/owl_vae_f16_c16_distill_v0_nogan",
@@ -73,39 +59,51 @@ def _runtime_config(*, warmup_on_load: bool = False) -> WaypointRuntimeConfig:
 
 
 def _build_model(engine: _StubEngine) -> WaypointLucidModel:
-    model = WaypointLucidModel({})
-    model.bind_runtime(_runtime_config(), logging.getLogger("tests.waypoint_model"))
+    model = WaypointLucidModel(_runtime_config())
+    model.bind_runtime(None, logging.getLogger("tests.waypoint_model"))
     model._engine = engine
     return model
 
 
-def test_waypoint_manifest_exposes_parity_actions() -> None:
-    manifest = WaypointLucidModel._lucid_definition.to_manifest()
-    action_names = {action["name"] for action in manifest["actions"]}
+def test_waypoint_manifest_exposes_inputs() -> None:
+    manifest = build_model_definition(WaypointLucidModel).to_manifest()
+    input_names = {item["name"] for item in manifest["inputs"]}
 
-    assert {"set_prompt", "set_buttons", "mouse_move", "scroll"}.issubset(action_names)
+    assert {
+        "set_prompt",
+        "forward",
+        "backward",
+        "left",
+        "right",
+        "jump",
+        "sprint",
+        "crouch",
+        "primary_fire",
+        "secondary_fire",
+        "look",
+        "scroll",
+    }.issubset(input_names)
 
 
 @pytest.mark.asyncio
-async def test_start_session_persists_buttons_and_drains_transient_inputs() -> None:
+async def test_session_persists_buttons_and_drains_transient_inputs() -> None:
     published: list[np.ndarray] = []
     ctx: SessionContext | None = None
+    session = None
     engine = _StubEngine()
     model = _build_model(engine)
 
     async def publish_fn(_name: str, payload: object, _ts_ms: int | None) -> None:
         assert ctx is not None
+        assert session is not None
         published.append(np.array(payload, copy=True))
         if len(published) == 1:
-            ctx.state.set("set_prompt", _PromptState(prompt="new prompt"))
-            ctx.state.set(
-                "set_buttons",
-                _ButtonsState(buttons=[0x57]),
-            )
-            await model.mouse_move(ctx, dx=10, dy=-4)
-            await model.mouse_move(ctx, dx=5, dy=1)
-            await model.scroll(ctx, amount=120)
-            await model.scroll(ctx, amount=120)
+            session.set_prompt("new prompt")
+            session.forward(True)
+            session.look(10, -4)
+            session.look(5, 1)
+            session.scroll(120)
+            session.scroll(120)
             return
         if len(published) == 3:
             ctx.running = False
@@ -113,12 +111,13 @@ async def test_start_session_persists_buttons_and_drains_transient_inputs() -> N
     ctx = SessionContext(
         session_id="s1",
         room_name="wm-s1",
-        outputs=model.resolve_outputs((WaypointLucidModel.main_video,)),
+        outputs=model.outputs,
         publish_fn=publish_fn,
         logger=logging.getLogger("tests.waypoint_model"),
     )
+    session = model.create_session(ctx)
 
-    await asyncio.wait_for(model.start_session(ctx), timeout=1.0)
+    await asyncio.wait_for(session.run(), timeout=1.0)
 
     assert [int(frame[0, 0, 0]) for frame in published] == [10, 200, 200]
     assert engine.start_prompts == ["old prompt"]
@@ -138,134 +137,59 @@ async def test_start_session_persists_buttons_and_drains_transient_inputs() -> N
     )
 
 
-def test_set_buttons_rejects_invalid_button_ids() -> None:
-    action_definition = next(
-        action
-        for action in WaypointLucidModel._lucid_definition.actions
-        if action.name == "set_buttons"
+@pytest.mark.asyncio
+async def test_session_close_delegates_to_engine() -> None:
+    engine = _StubEngine()
+    model = _build_model(engine)
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=model.outputs,
+        publish_fn=_noop_publish,
+        logger=logging.getLogger("tests.waypoint_model"),
     )
+    session = model.create_session(ctx)
 
-    with pytest.raises(ValidationError):
-        action_definition.arg_model.model_validate({"buttons": [-1]})
+    await session.close()
 
-    with pytest.raises(ValidationError):
-        action_definition.arg_model.model_validate({"buttons": [256]})
+    assert engine.end_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_start_session_commits_compiler_cache_after_first_frame(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+async def test_session_commits_compiler_cache_after_first_frame(
 ) -> None:
     engine = _StubEngine()
     model = _build_model(engine)
     commit_calls: list[str] = []
-
-    class _FakeVolume:
-        def commit(self) -> None:
-            commit_calls.append("commit")
-
-    fake_modal = types.SimpleNamespace(
-        Volume=types.SimpleNamespace(
-            from_name=lambda name: commit_calls.append(name) or _FakeVolume()
-        )
-    )
-
-    monkeypatch.setenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
-    monkeypatch.setenv("MODAL_COMPILER_CACHE_ROOT", str(tmp_path))
-    monkeypatch.setitem(sys.modules, "modal", fake_modal)
+    model.compiler_cache_commit_hook = lambda _logger, reason: commit_calls.append(reason) or True
 
     ctx: SessionContext | None = None
+    session = None
 
     async def publish_fn(_name: str, _payload: object, _ts_ms: int | None) -> None:
         assert ctx is not None
-        if len(commit_calls) >= 2:
+        if len(commit_calls) >= 1:
             ctx.running = False
 
     ctx = SessionContext(
         session_id="s1",
         room_name="wm-s1",
-        outputs=model.resolve_outputs((WaypointLucidModel.main_video,)),
+        outputs=model.outputs,
         publish_fn=publish_fn,
         logger=logging.getLogger("tests.waypoint_model"),
     )
+    session = model.create_session(ctx)
 
-    await asyncio.wait_for(model.start_session(ctx), timeout=1.0)
+    await asyncio.wait_for(session.run(), timeout=1.0)
 
-    assert commit_calls == ["lucid-hf-cache", "commit"]
-
-
-@pytest.mark.asyncio
-async def test_end_session_delegates_to_engine() -> None:
-    engine = _StubEngine()
-    model = _build_model(engine)
-
-    async def publish_fn(_name: str, _payload: object, _ts_ms: int | None) -> None:
-        return None
-
-    ctx = SessionContext(
-        session_id="s1",
-        room_name="wm-s1",
-        outputs=model.resolve_outputs((WaypointLucidModel.main_video,)),
-        publish_fn=publish_fn,
-        logger=logging.getLogger("tests.waypoint_model"),
-    )
-
-    await model.end_session(ctx)
-
-    assert engine.end_calls == 1
-
-
-@pytest.mark.asyncio
-async def test_end_session_commits_compiler_cache_volume(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-) -> None:
-    engine = _StubEngine()
-    model = _build_model(engine)
-    commit_calls: list[str] = []
-
-    class _FakeVolume:
-        def commit(self) -> None:
-            commit_calls.append("commit")
-
-    fake_modal = types.SimpleNamespace(
-        Volume=types.SimpleNamespace(
-            from_name=lambda name: commit_calls.append(name) or _FakeVolume()
-        )
-    )
-
-    monkeypatch.setenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
-    monkeypatch.setenv("MODAL_COMPILER_CACHE_ROOT", str(tmp_path))
-    monkeypatch.setitem(sys.modules, "modal", fake_modal)
-
-    async def publish_fn(_name: str, _payload: object, _ts_ms: int | None) -> None:
-        return None
-
-    ctx = SessionContext(
-        session_id="s1",
-        room_name="wm-s1",
-        outputs=model.resolve_outputs((WaypointLucidModel.main_video,)),
-        publish_fn=publish_fn,
-        logger=logging.getLogger("tests.waypoint_model"),
-    )
-
-    await model.end_session(ctx)
-
-    assert engine.end_calls == 1
-    assert commit_calls == ["lucid-hf-cache", "commit"]
+    assert commit_calls == ["first_frame"]
 
 
 @pytest.mark.asyncio
 async def test_model_load_commits_compiler_cache_after_warmup(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
 ) -> None:
     commit_calls: list[str] = []
-
-    class _FakeVolume:
-        def commit(self) -> None:
-            commit_calls.append("commit")
 
     class _StubLoadEngine:
         def __init__(self, runtime_config, logger) -> None:
@@ -274,24 +198,20 @@ async def test_model_load_commits_compiler_cache_after_warmup(
 
         async def load(self) -> None:
             return None
+    monkeypatch.setattr("waypoint_modal_example.model.WaypointEngine", _StubLoadEngine)
 
-    fake_modal = types.SimpleNamespace(
-        Volume=types.SimpleNamespace(
-            from_name=lambda name: commit_calls.append(name) or _FakeVolume()
+    model = WaypointLucidModel(_runtime_config(warmup_on_load=True))
+    model.bind_runtime(None, logging.getLogger("tests.waypoint_model"))
+    model.compiler_cache_commit_hook = lambda _logger, reason: commit_calls.append(reason) or True
+
+    await model.load(
+        LoadContext(
+            config=model.config,
+            logger=logging.getLogger("tests.waypoint_model"),
         )
     )
 
-    monkeypatch.setenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
-    monkeypatch.setenv("MODAL_COMPILER_CACHE_ROOT", str(tmp_path))
-    monkeypatch.setitem(sys.modules, "modal", fake_modal)
-    monkeypatch.setattr("waypoint_modal_example.model.WaypointEngine", _StubLoadEngine)
-
-    model = WaypointLucidModel({})
-    model.bind_runtime(_runtime_config(warmup_on_load=True), logging.getLogger("tests.waypoint_model"))
-
-    await model.load()
-
-    assert commit_calls == ["lucid-hf-cache", "commit"]
+    assert commit_calls == ["post_warmup"]
 
 
 @pytest.mark.asyncio
@@ -369,3 +289,7 @@ def test_engine_rolls_session_before_exceeding_frame_history(monkeypatch: pytest
     engine._roll_session_if_needed_sync()
 
     assert rollover_calls == [("roll prompt", 9)]
+
+
+async def _noop_publish(_name: str, _payload: object, _ts_ms: int | None) -> None:
+    return None

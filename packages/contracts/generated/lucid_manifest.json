@@ -1,7 +1,8 @@
 {
-  "actions": [
+  "inputs": [
     {
       "args_schema": {
+        "additionalProperties": false,
         "properties": {
           "prompt": {
             "minLength": 1,
@@ -12,88 +13,11 @@
         "required": [
           "prompt"
         ],
-        "title": "SetPromptArgs",
+        "title": "SetPromptInputArgs",
         "type": "object"
       },
       "description": "Update the scene prompt used by Yume.",
-      "mode": "state",
       "name": "set_prompt"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Begin model generation for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.start"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Pause model stepping for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.pause"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Resume model stepping for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.resume"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "output": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "output",
-          "enabled"
-        ],
-        "type": "object"
-      },
-      "description": "Enable or disable a named output for the current session.",
-      "mode": "state",
-      "name": "lucid.runtime.set_output_enabled"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "max_rate_hz": {
-            "minimum": 0,
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "output": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "output",
-          "max_rate_hz"
-        ],
-        "type": "object"
-      },
-      "description": "Throttle a named output to a maximum publish rate in Hertz.",
-      "mode": "state",
-      "name": "lucid.runtime.set_output_rate"
     }
   ],
   "model": {

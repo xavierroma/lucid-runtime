@@ -3,26 +3,26 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lucid-runtime"
+name = "lucid-modal"
 version = "0.1.0"
-description = "Lucid runtime library for realtime world models"
+description = "Modal adapter for Lucid runtimes"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "httpx>=0.27,<1",
-  "numpy>=1.26,<3",
+  "fastapi>=0.115,<1",
+  "modal>=1.3.5",
   "pydantic>=2.8,<3",
+  "lucid-runtime>=0.1,<0.2",
 ]
 
 [project.optional-dependencies]
-livekit = [
-  "livekit>=0.13,<0.14",
-  "av>=13,<14",
-]
 test = [
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<0.25",
 ]
+
+[project.scripts]
+lucid-modal = "lucid_modal.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -32,3 +32,6 @@ where = ["src"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+lucid-runtime = { path = "../lucid", editable = true }

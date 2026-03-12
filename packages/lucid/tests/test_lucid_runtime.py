@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -11,29 +12,43 @@ from lucid import LucidRuntime, SessionContext, publish
 from lucid.capabilities import manifest as load_manifest
 from lucid.config import RuntimeConfig
 import lucid.discovery as discovery
-from yume_modal_example.config import YumeRuntimeConfig
+from yume_modal_example.model import YumeLucidModel
 
 
-@pytest.fixture
-def worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LIVEKIT_URL", "wss://example.livekit.invalid")
-    monkeypatch.setenv("WM_ENGINE", "fake")
-    monkeypatch.setenv("WM_LIVEKIT_MODE", "fake")
-    monkeypatch.setenv("YUME_MODEL_DIR", "/tmp/yume-model")
-    monkeypatch.setenv("YUME_CHUNK_FRAMES", "1")
-    monkeypatch.setenv("WM_MAX_QUEUE_FRAMES", "8")
-    monkeypatch.setenv("WM_FRAME_WIDTH", "64")
-    monkeypatch.setenv("WM_FRAME_HEIGHT", "64")
+def _runtime_config() -> RuntimeConfig:
+    return RuntimeConfig(
+        livekit_url="wss://example.livekit.invalid",
+        frame_width=64,
+        frame_height=64,
+        max_queue_frames=8,
+        livekit_mode="fake",
+    )
 
 
 @pytest.mark.asyncio
-async def test_manifest_includes_model_actions_outputs(worker_env: None) -> None:
-    manifest = load_manifest()
+async def test_manifest_includes_model_inputs_outputs() -> None:
+    manifest = load_manifest("yume_modal_example.model:YumeLucidModel")
 
     assert manifest["model"]["name"] == "yume"
-    assert any(action["name"] == "set_prompt" for action in manifest["actions"])
-    assert any(action["name"] == "lucid.runtime.start" for action in manifest["actions"])
-    assert any(action["name"] == "lucid.runtime.pause" for action in manifest["actions"])
+    assert manifest["inputs"] == [
+        {
+            "name": "set_prompt",
+            "description": "Update the scene prompt used by Yume.",
+            "args_schema": {
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {
+                        "minLength": 1,
+                        "title": "Prompt",
+                        "type": "string",
+                    }
+                },
+                "required": ["prompt"],
+                "title": "SetPromptInputArgs",
+                "type": "object",
+            },
+        }
+    ]
     assert manifest["outputs"] == [
         {
             "name": "main_video",
@@ -47,46 +62,30 @@ async def test_manifest_includes_model_actions_outputs(worker_env: None) -> None
 
 
 @pytest.mark.asyncio
-async def test_runtime_dispatches_state_and_command_actions(worker_env: None) -> None:
-    runtime = LucidRuntime.load_selected(
-        runtime_config=RuntimeConfig.from_env(),
+async def test_runtime_dispatches_inputs_to_session() -> None:
+    runtime = LucidRuntime.load_model(
+        runtime_config=_runtime_config(),
         logger=logging.getLogger("tests.lucid_runtime"),
+        model=YumeLucidModel,
     )
     session_ctx = runtime.create_session_context(
         session_id="s1",
         room_name="wm-s1",
         publish_fn=_noop_publish,
     )
+    session = cast(object, runtime._sessions["s1"])
 
-    await runtime.dispatch_action(session_ctx, "set_prompt", {"prompt": "new prompt"})
-    await runtime.dispatch_action(session_ctx, "lucid.runtime.pause", {})
-    await runtime.dispatch_action(session_ctx, "lucid.runtime.resume", {})
-    await runtime.dispatch_action(session_ctx, "lucid.runtime.start", {})
-    await runtime.dispatch_action(session_ctx, "lucid.runtime.pause", {})
-    await runtime.dispatch_action(session_ctx, "lucid.runtime.resume", {})
-    await runtime.dispatch_action(
-        session_ctx,
-        "lucid.runtime.set_output_enabled",
-        {"output": "main_video", "enabled": False},
-    )
-    await runtime.dispatch_action(
-        session_ctx,
-        "lucid.runtime.set_output_rate",
-        {"output": "main_video", "max_rate_hz": 4},
-    )
+    await runtime.dispatch_input(session_ctx, "set_prompt", {"prompt": "new prompt"})
 
-    assert session_ctx.state.set_prompt.prompt == "new prompt"
-    assert session_ctx.started is True
-    assert session_ctx.paused is False
-    assert session_ctx._output_enabled["main_video"] is False
-    assert session_ctx._output_rate_hz["main_video"] == 4
+    assert getattr(session, "prompt") == "new prompt"
 
 
 @pytest.mark.asyncio
-async def test_pause_and_resume_are_noops_before_start(worker_env: None) -> None:
-    runtime = LucidRuntime.load_selected(
-        runtime_config=RuntimeConfig.from_env(),
+async def test_runtime_rejects_unknown_input() -> None:
+    runtime = LucidRuntime.load_model(
+        runtime_config=_runtime_config(),
         logger=logging.getLogger("tests.lucid_runtime"),
+        model="yume_modal_example.model:YumeLucidModel",
     )
     session_ctx = runtime.create_session_context(
         session_id="s2",
@@ -94,13 +93,8 @@ async def test_pause_and_resume_are_noops_before_start(worker_env: None) -> None
         publish_fn=_noop_publish,
     )
 
-    await runtime.dispatch_action(session_ctx, "lucid.runtime.pause", {})
-    assert session_ctx.started is False
-    assert session_ctx.paused is False
-
-    await runtime.dispatch_action(session_ctx, "lucid.runtime.resume", {})
-    assert session_ctx.started is False
-    assert session_ctx.paused is False
+    with pytest.raises(Exception, match="unknown input"):
+        await runtime.dispatch_input(session_ctx, "missing", {})
 
 
 @pytest.mark.asyncio
@@ -132,14 +126,14 @@ async def test_session_context_validates_video_json_and_bytes_outputs() -> None:
     assert seen[2] == ("blob", b"abc")
 
 
-def test_generated_artifacts_are_fresh(worker_env: None) -> None:
+def test_generated_artifacts_are_fresh() -> None:
     script_path = Path(__file__).resolve().parents[3] / "scripts" / "generate_lucid_artifacts.py"
     spec = importlib.util.spec_from_file_location("generate_lucid_artifacts", script_path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)
 
-    manifest = load_manifest()
+    manifest = load_manifest("yume_modal_example.model:YumeLucidModel")
     manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.json"
     waypoint_manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.waypoint.json"
     ts_path = Path(__file__).resolve().parents[3] / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.ts"
@@ -169,26 +163,22 @@ def test_generated_artifacts_are_fresh(worker_env: None) -> None:
 
 
 def test_model_loader_can_import_example_model_module(
-    worker_env: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("WM_MODEL_MODULE", "yume_modal_example.model")
     discovery._loaded_modules.clear()
+    discovery._loaded_model_classes.clear()
 
-    assert discovery.ensure_model_module_loaded() == "yume_modal_example.model"
-    assert discovery.configured_model_packages() == ("yume_modal_example",)
+    assert discovery.load_model_module("yume_modal_example.model:YumeLucidModel").__name__ == "yume_modal_example.model"
+    assert (
+        discovery.resolve_model_class("yume_modal_example.model:YumeLucidModel").__name__
+        == "YumeLucidModel"
+    )
 
 
-def test_build_model_runtime_config_uses_model_module_builder(
-    worker_env: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("WM_MODEL_MODULE", "yume_modal_example.model")
+def test_model_loader_accepts_direct_model_class() -> None:
     discovery._loaded_modules.clear()
+    discovery._loaded_model_classes.clear()
 
-    runtime_config = discovery.build_model_runtime_config(RuntimeConfig.from_env())
-
-    assert isinstance(runtime_config, YumeRuntimeConfig)
+    assert discovery.resolve_model_class(YumeLucidModel) is YumeLucidModel
 
 
 async def _noop_publish(_name: str, _payload: object, _ts_ms: int | None) -> None:

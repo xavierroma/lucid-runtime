@@ -2,66 +2,268 @@
 // Do not edit it by hand.
 
 export const lucidManifest = {
-  "actions": [
+  "inputs": [
     {
       "args_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pressed"
+        ],
+        "title": "BackwardInputArgs",
+        "type": "object"
+      },
+      "binding": {
+        "keys": [
+          "KeyS",
+          "ArrowDown"
+        ],
+        "kind": "hold",
+        "mouse_buttons": []
+      },
+      "description": "Move backward.",
+      "name": "backward"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pressed"
+        ],
+        "title": "CrouchInputArgs",
+        "type": "object"
+      },
+      "binding": {
+        "keys": [
+          "ControlLeft",
+          "ControlRight"
+        ],
+        "kind": "hold",
+        "mouse_buttons": []
+      },
+      "description": "Crouch.",
+      "name": "crouch"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pressed"
+        ],
+        "title": "ForwardInputArgs",
+        "type": "object"
+      },
+      "binding": {
+        "keys": [
+          "KeyW",
+          "ArrowUp"
+        ],
+        "kind": "hold",
+        "mouse_buttons": []
+      },
+      "description": "Move forward.",
+      "name": "forward"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pressed"
+        ],
+        "title": "JumpInputArgs",
+        "type": "object"
+      },
+      "binding": {
+        "keys": [
+          "Space"
+        ],
+        "kind": "hold",
+        "mouse_buttons": []
+      },
+      "description": "Jump.",
+      "name": "jump"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pressed"
+        ],
+        "title": "LeftInputArgs",
+        "type": "object"
+      },
+      "binding": {
+        "keys": [
+          "KeyA",
+          "ArrowLeft"
+        ],
+        "kind": "hold",
+        "mouse_buttons": []
+      },
+      "description": "Strafe left.",
+      "name": "left"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
         "properties": {
           "dx": {
-            "default": 0.0,
             "title": "Dx",
             "type": "number"
           },
           "dy": {
-            "default": 0.0,
             "title": "Dy",
             "type": "number"
           }
         },
-        "title": "MouseMoveArgs",
+        "required": [
+          "dx",
+          "dy"
+        ],
+        "title": "LookInputArgs",
         "type": "object"
       },
-      "description": "Apply a relative mouse movement delta for the next Waypoint frame.",
-      "mode": "command",
-      "name": "mouse_move"
+      "binding": {
+        "kind": "pointer",
+        "pointer_lock": true
+      },
+      "description": "Look around.",
+      "name": "look"
     },
     {
       "args_schema": {
+        "additionalProperties": false,
         "properties": {
-          "amount": {
-            "default": 0,
-            "title": "Amount",
-            "type": "integer"
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
           }
         },
-        "title": "ScrollArgs",
+        "required": [
+          "pressed"
+        ],
+        "title": "PrimaryFireInputArgs",
         "type": "object"
       },
-      "description": "Apply a relative scroll wheel delta for the next Waypoint frame.",
-      "mode": "command",
+      "binding": {
+        "keys": [
+          "KeyJ"
+        ],
+        "kind": "hold",
+        "mouse_buttons": [
+          0
+        ]
+      },
+      "description": "Primary fire.",
+      "name": "primary_fire"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pressed"
+        ],
+        "title": "RightInputArgs",
+        "type": "object"
+      },
+      "binding": {
+        "keys": [
+          "KeyD",
+          "ArrowRight"
+        ],
+        "kind": "hold",
+        "mouse_buttons": []
+      },
+      "description": "Strafe right.",
+      "name": "right"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "delta": {
+            "title": "Delta",
+            "type": "number"
+          }
+        },
+        "required": [
+          "delta"
+        ],
+        "title": "ScrollInputArgs",
+        "type": "object"
+      },
+      "binding": {
+        "kind": "wheel",
+        "step": 120
+      },
+      "description": "Scroll the wheel.",
       "name": "scroll"
     },
     {
       "args_schema": {
+        "additionalProperties": false,
         "properties": {
-          "buttons": {
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "title": "Buttons",
-            "type": "array"
+          "pressed": {
+            "title": "Pressed",
+            "type": "boolean"
           }
         },
-        "title": "SetButtonsArgs",
+        "required": [
+          "pressed"
+        ],
+        "title": "SecondaryFireInputArgs",
         "type": "object"
       },
-      "description": "Set the held button IDs for Waypoint.",
-      "mode": "state",
-      "name": "set_buttons"
+      "binding": {
+        "keys": [
+          "KeyK"
+        ],
+        "kind": "hold",
+        "mouse_buttons": [
+          2
+        ]
+      },
+      "description": "Secondary fire.",
+      "name": "secondary_fire"
     },
     {
       "args_schema": {
+        "additionalProperties": false,
         "properties": {
           "prompt": {
             "minLength": 1,
@@ -72,88 +274,37 @@ export const lucidManifest = {
         "required": [
           "prompt"
         ],
-        "title": "SetPromptArgs",
+        "title": "SetPromptInputArgs",
         "type": "object"
       },
       "description": "Update the text prompt used by Waypoint.",
-      "mode": "state",
       "name": "set_prompt"
     },
     {
       "args_schema": {
         "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Begin model generation for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.start"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Pause model stepping for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.pause"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {},
-        "type": "object"
-      },
-      "description": "Resume model stepping for the current session.",
-      "mode": "command",
-      "name": "lucid.runtime.resume"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
         "properties": {
-          "enabled": {
+          "pressed": {
+            "title": "Pressed",
             "type": "boolean"
-          },
-          "output": {
-            "type": "string"
           }
         },
         "required": [
-          "output",
-          "enabled"
+          "pressed"
         ],
+        "title": "SprintInputArgs",
         "type": "object"
       },
-      "description": "Enable or disable a named output for the current session.",
-      "mode": "state",
-      "name": "lucid.runtime.set_output_enabled"
-    },
-    {
-      "args_schema": {
-        "additionalProperties": false,
-        "properties": {
-          "max_rate_hz": {
-            "minimum": 0,
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "output": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "output",
-          "max_rate_hz"
+      "binding": {
+        "keys": [
+          "ShiftLeft",
+          "ShiftRight"
         ],
-        "type": "object"
+        "kind": "hold",
+        "mouse_buttons": []
       },
-      "description": "Throttle a named output to a maximum publish rate in Hertz.",
-      "mode": "state",
-      "name": "lucid.runtime.set_output_rate"
+      "description": "Sprint.",
+      "name": "sprint"
     }
   ],
   "model": {
@@ -172,68 +323,116 @@ export const lucidManifest = {
   ]
 } as const
 
-export interface MouseMoveArgs {
-  "dx"?: number
-  "dy"?: number
+export type HoldInputBinding = {
+  kind: "hold"
+  keys: string[]
+  mouse_buttons: number[]
+}
+
+export type PressInputBinding = {
+  kind: "press"
+  keys: string[]
+  mouse_buttons: number[]
+}
+
+export type AxisInputBinding = {
+  kind: "axis"
+  positive_keys: string[]
+  negative_keys: string[]
+}
+
+export type PointerInputBinding = {
+  kind: "pointer"
+  pointer_lock: boolean
+}
+
+export type WheelInputBinding = {
+  kind: "wheel"
+  step: number
+}
+
+export type InputBinding =
+  | HoldInputBinding
+  | PressInputBinding
+  | AxisInputBinding
+  | PointerInputBinding
+  | WheelInputBinding
+
+export interface BackwardArgs {
+  "pressed": boolean
+}
+export interface CrouchArgs {
+  "pressed": boolean
+}
+export interface ForwardArgs {
+  "pressed": boolean
+}
+export interface JumpArgs {
+  "pressed": boolean
+}
+export interface LeftArgs {
+  "pressed": boolean
+}
+export interface LookArgs {
+  "dx": number
+  "dy": number
+}
+export interface PrimaryFireArgs {
+  "pressed": boolean
+}
+export interface RightArgs {
+  "pressed": boolean
 }
 export interface ScrollArgs {
-  "amount"?: number
+  "delta": number
 }
-export interface SetButtonsArgs {
-  "buttons"?: number[]
+export interface SecondaryFireArgs {
+  "pressed": boolean
 }
 export interface SetPromptArgs {
   "prompt": string
 }
-export interface LucidRuntimeStartArgs {
-}
-export interface LucidRuntimePauseArgs {
-}
-export interface LucidRuntimeResumeArgs {
-}
-export interface LucidRuntimeSetOutputEnabledArgs {
-  "output": string
-  "enabled": boolean
-}
-export interface LucidRuntimeSetOutputRateArgs {
-  "output": string
-  "max_rate_hz": null | number
+export interface SprintArgs {
+  "pressed": boolean
 }
 
-export interface ActionArgumentsByName {
-  "mouse_move": MouseMoveArgs
+export interface InputArgumentsByName {
+  "backward": BackwardArgs
+  "crouch": CrouchArgs
+  "forward": ForwardArgs
+  "jump": JumpArgs
+  "left": LeftArgs
+  "look": LookArgs
+  "primary_fire": PrimaryFireArgs
+  "right": RightArgs
   "scroll": ScrollArgs
-  "set_buttons": SetButtonsArgs
+  "secondary_fire": SecondaryFireArgs
   "set_prompt": SetPromptArgs
-  "lucid.runtime.start": LucidRuntimeStartArgs
-  "lucid.runtime.pause": LucidRuntimePauseArgs
-  "lucid.runtime.resume": LucidRuntimeResumeArgs
-  "lucid.runtime.set_output_enabled": LucidRuntimeSetOutputEnabledArgs
-  "lucid.runtime.set_output_rate": LucidRuntimeSetOutputRateArgs
+  "sprint": SprintArgs
 }
 
-export type ActionName = "mouse_move" | "scroll" | "set_buttons" | "set_prompt" | "lucid.runtime.start" | "lucid.runtime.pause" | "lucid.runtime.resume" | "lucid.runtime.set_output_enabled" | "lucid.runtime.set_output_rate"
+export type InputName = "backward" | "crouch" | "forward" | "jump" | "left" | "look" | "primary_fire" | "right" | "scroll" | "secondary_fire" | "set_prompt" | "sprint"
 
-export interface ActionEnvelope<TName extends ActionName = ActionName> {
+export interface InputEnvelope<TName extends InputName = InputName> {
   type: "action"
   seq: number
   ts_ms: number
   session_id: string | null
   payload: {
     name: TName
-    args: ActionArgumentsByName[TName]
+    args: InputArgumentsByName[TName]
   }
 }
 
 const encoder = new TextEncoder()
 
-export function encodeActionMessage<TName extends ActionName>(args: {
+export function encodeInputMessage<TName extends InputName>(args: {
   name: TName
-  args: ActionArgumentsByName[TName]
+  args: InputArgumentsByName[TName]
   seq: number
   sessionId: string
 }) {
-  const envelope: ActionEnvelope<TName> = {
+  const envelope: InputEnvelope<TName> = {
     type: "action",
     seq: args.seq,
     ts_ms: Date.now(),
