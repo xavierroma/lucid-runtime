@@ -8,10 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lucid.publish import OutputSpec
-
-from lucid.config import RuntimeConfig
-from lucid.research_server import ResearchSessionService, create_app
 from lucid.types import Assignment
+
+from lucid_dev.research_server import ResearchSessionService, create_app
 
 
 class StubLiveKitAdapter:
@@ -47,27 +46,16 @@ class StubLiveKitAdapter:
         _ = payload
 
 
-@pytest.fixture
-def worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LIVEKIT_URL", "wss://example.livekit.invalid")
-    monkeypatch.setenv("LIVEKIT_API_KEY", "api-key")
-    monkeypatch.setenv("LIVEKIT_API_SECRET", "api-secret")
-    monkeypatch.setenv("WM_ENGINE", "fake")
-    monkeypatch.setenv("WM_LIVEKIT_MODE", "fake")
-    monkeypatch.setenv("YUME_MODEL_DIR", "/tmp/yume-model")
-    monkeypatch.setenv("YUME_CHUNK_FRAMES", "1")
-    monkeypatch.setenv("WM_MAX_QUEUE_FRAMES", "8")
-    monkeypatch.setenv("WM_FRAME_WIDTH", "64")
-    monkeypatch.setenv("WM_FRAME_HEIGHT", "64")
+def test_research_server_exposes_same_session_shape() -> None:
+    from lucid import RuntimeConfig
 
-
-def test_research_server_exposes_same_session_shape(worker_env: None) -> None:
     service = ResearchSessionService(
-        RuntimeConfig.from_env(),
+        RuntimeConfig(livekit_url="wss://example.livekit.invalid", livekit_mode="fake"),
         logging.getLogger("tests.research_server"),
+        model="yume_modal_example.model:YumeLucidModel",
         livekit_factory=lambda: StubLiveKitAdapter(),
     )
-    app = create_app(service)
+    app = create_app(service, api_key="api-key", api_secret="api-secret")
 
     with TestClient(app) as client:
         created = client.post("/sessions")

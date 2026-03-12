@@ -6,8 +6,16 @@ from pathlib import Path
 
 import modal
 
-from lucid.config import RuntimeConfig
-from lucid.modal import create_app
+from lucid_modal import (
+    build_modal_volume_commit_hook,
+    create_app,
+    env_secret,
+    load_runtime_config_from_env,
+    with_lucid_runtime,
+)
+
+from .config import WaypointRuntimeConfig
+from .model import WaypointLucidModel
 
 APP_NAME = os.getenv("MODAL_APP_NAME", "lucid-waypoint-worker")
 DISPATCH_TOKEN = os.getenv("MODAL_DISPATCH_TOKEN", "")
@@ -31,7 +39,6 @@ WORLD_ENGINE_COMMIT = os.getenv(
 MODEL_VOLUME_NAME = os.getenv("MODAL_MODEL_VOLUME", "lucid-waypoint-models")
 HF_CACHE_VOLUME_NAME = os.getenv("MODAL_HF_CACHE_VOLUME", "lucid-hf-cache")
 PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
-_LOCAL_IGNORE_PARTS = {"__pycache__", ".pytest_cache", ".venv", "build", "dist"}
 
 
 def _cache_slug(value: str) -> str:
@@ -44,28 +51,9 @@ COMPILER_CACHE_ROOT = os.getenv(
     "MODAL_COMPILER_CACHE_ROOT",
     f"/cache/huggingface/compiler/waypoint/{_cache_slug(GPU_TYPE)}",
 )
-
-
-def _ignore_local_artifacts(path: Path) -> bool:
-    if any(part in _LOCAL_IGNORE_PARTS for part in path.parts):
-        return True
-    if any(part.endswith(".egg-info") for part in path.parts):
-        return True
-    return path.suffix in {".pyc", ".pyo"}
-
-
-def _env_secret(*names: str) -> modal.Secret:
-    payload = {}
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            payload[name] = value
-    return modal.Secret.from_dict(payload)
-
-
-image = (
+image = with_lucid_runtime(
     modal.Image.from_registry(CUDA_DEVEL_IMAGE, add_python=PYTHON_VERSION)
-    .apt_install("build-essential", "git", "ffmpeg", "ca-certificates")
+    .apt_install("build-essential", "git")
     .env(
         {
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
@@ -104,39 +92,19 @@ image = (
             "python -m pip install --no-deps "
             f"'git+{WORLD_ENGINE_REPO_URL}@{WORLD_ENGINE_COMMIT}'"
         ),
-    )
-    .add_local_dir(
-        "packages/lucid",
-        "/workspace/packages/lucid",
-        copy=True,
-        ignore=_ignore_local_artifacts,
-    )
-    .add_local_dir(
-        "examples/waypoint_modal",
-        "/workspace/examples/waypoint_modal",
-        copy=True,
-        ignore=_ignore_local_artifacts,
-    )
-    .run_commands(
-        "python -m pip install '/workspace/packages/lucid[livekit]'",
-        "python -m pip install --no-deps /workspace/examples/waypoint_modal",
-    )
+    ),
+    extra_local_dirs=[("examples/waypoint_modal", "/workspace/examples/waypoint_modal")],
 )
+image = image.run_commands("python -m pip install --no-deps /workspace/examples/waypoint_modal")
 model_volume = modal.Volume.from_name(MODEL_VOLUME_NAME, create_if_missing=True)
 hf_cache_volume = modal.Volume.from_name(HF_CACHE_VOLUME_NAME, create_if_missing=True)
-download_image = (
+download_image = with_lucid_runtime(
     modal.Image.debian_slim(python_version=PYTHON_VERSION)
-    .pip_install("huggingface_hub[hf_transfer]")
-    .add_local_dir(
-        "packages/lucid",
-        "/workspace/packages/lucid",
-        copy=True,
-        ignore=_ignore_local_artifacts,
-    )
-    .run_commands("python -m pip install /workspace/packages/lucid")
+    .pip_install("huggingface_hub[hf_transfer]"),
+    include_livekit=False,
 )
 
-runtime_secret = _env_secret(
+runtime_secret = env_secret(
     "MODAL_DISPATCH_TOKEN",
     "LIVEKIT_URL",
     "LIVEKIT_API_KEY",
@@ -153,8 +121,6 @@ runtime_secret = _env_secret(
     "TORCH_SHOW_CPP_STACKTRACES",
     "WM_ENGINE",
     "WM_LIVEKIT_MODE",
-    "WM_MODEL_NAME",
-    "WM_MODEL_MODULE",
     "WM_STATUS_TOPIC",
     "WM_FRAME_WIDTH",
     "WM_FRAME_HEIGHT",
@@ -162,17 +128,25 @@ runtime_secret = _env_secret(
     "WM_MAX_QUEUE_FRAMES",
 )
 
+
+def _configure_runtime(runtime, _logger) -> None:
+    if isinstance(runtime.model, WaypointLucidModel):
+        runtime.model.compiler_cache_commit_hook = build_modal_volume_commit_hook()
+
 modal_bundle = create_app(
     app_name=APP_NAME,
+    model=WaypointLucidModel,
     image=image,
     gpu=GPU_TYPE,
     secrets=[runtime_secret],
+    model_config_loader=WaypointRuntimeConfig.from_env,
+    runtime_setup=_configure_runtime,
     min_containers=MODAL_MIN_CONTAINERS,
     scaledown_window_secs=MODAL_SCALEDOWN_WINDOW_SECS,
     startup_timeout_seconds=MODAL_STARTUP_TIMEOUT_SECS,
     volumes={"/models": model_volume, "/cache/huggingface": hf_cache_volume},
     dispatch_token=DISPATCH_TOKEN,
-    runtime_config_loader=RuntimeConfig.from_env,
+    runtime_config_loader=load_runtime_config_from_env,
     logger_name="waypoint_modal_example.modal",
 )
 app = modal_bundle.app
@@ -181,7 +155,7 @@ app = modal_bundle.app
 @app.function(
     image=download_image,
     volumes={"/models": model_volume},
-    secrets=[_env_secret("HF_TOKEN")],
+    secrets=[env_secret("HF_TOKEN")],
     timeout=60 * 60,
 )
 def download_model(

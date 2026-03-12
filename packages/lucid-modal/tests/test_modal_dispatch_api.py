@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from lucid.modal import (
+from lucid_modal import (
     FunctionCallStatus,
     LaunchRequest,
     SessionDispatcher,

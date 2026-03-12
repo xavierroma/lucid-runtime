@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import asyncio
 import logging
-import os
-import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -13,12 +12,18 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from .capabilities import DEFAULT_CONTROL_TOPIC, DEFAULT_STATUS_TOPIC, capabilities
-from .config import ConfigError, RuntimeConfig
-from .discovery import ensure_model_module_loaded
-from .host import SessionLifecycleHooks, SessionRunner
-from .livekit import mint_access_token
-from .types import Assignment
+from lucid import (
+    DEFAULT_CONTROL_TOPIC,
+    DEFAULT_STATUS_TOPIC,
+    ModelTarget,
+    RuntimeConfig,
+    SessionRunner,
+    capabilities,
+    mint_access_token,
+    resolve_model_class,
+)
+from lucid.host import SessionLifecycleHooks
+from lucid.types import Assignment
 
 
 class SessionState(str, Enum):
@@ -57,15 +62,20 @@ class ResearchSessionService:
         host_config: RuntimeConfig,
         logger: logging.Logger,
         *,
+        model: ModelTarget,
+        model_config: BaseModel | dict[str, Any] | None = None,
         livekit_factory=None,
     ) -> None:
-        ensure_model_module_loaded()
+        resolve_model_class(model)
         self._host_config = host_config
         self._logger = logger
+        self._model = model
         self._runner = SessionRunner(
             host_config,
             None,
             logger,
+            model=model,
+            model_config=model_config,
             livekit_factory=livekit_factory,
             lifecycle_hooks=SessionLifecycleHooks(
                 on_ready=self._mark_ready,
@@ -84,21 +94,13 @@ class ResearchSessionService:
             await asyncio.gather(self._active.task, return_exceptions=True)
         await self._runner.close()
 
-    async def create_session(self) -> SessionResponse:
+    async def create_session(self, *, api_key: str, api_secret: str) -> SessionResponse:
         async with self._lock:
             if self._active is not None and self._active.record.state not in {
                 SessionState.ENDED,
                 SessionState.FAILED,
             }:
                 raise HTTPException(status_code=409, detail="active session in progress")
-
-            api_key = os.getenv("LIVEKIT_API_KEY", "").strip()
-            api_secret = os.getenv("LIVEKIT_API_SECRET", "").strip()
-            if not api_key or not api_secret:
-                raise HTTPException(
-                    status_code=500,
-                    detail="LIVEKIT_API_KEY and LIVEKIT_API_SECRET are required for research mode",
-                )
 
             session_id = str(uuid4())
             room_name = f"wm-{session_id}"
@@ -136,6 +138,7 @@ class ResearchSessionService:
                 capabilities=capabilities(
                     control_topic=DEFAULT_CONTROL_TOPIC,
                     status_topic=DEFAULT_STATUS_TOPIC,
+                    model=self._model,
                 ),
             )
 
@@ -149,6 +152,7 @@ class ResearchSessionService:
                 capabilities=capabilities(
                     control_topic=DEFAULT_CONTROL_TOPIC,
                     status_topic=DEFAULT_STATUS_TOPIC,
+                    model=self._model,
                 ),
             )
 
@@ -200,16 +204,21 @@ class ResearchSessionService:
             self._active.record.state = SessionState.RUNNING
 
 
-def create_app(service: ResearchSessionService) -> FastAPI:
-    app = FastAPI()
-
-    @app.on_event("startup")
-    async def _startup() -> None:
+def create_app(
+    service: ResearchSessionService,
+    *,
+    api_key: str,
+    api_secret: str,
+) -> FastAPI:
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await service.startup()
+        try:
+            yield
+        finally:
+            await service.shutdown()
 
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        await service.shutdown()
+    app = FastAPI(lifespan=_lifespan)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
@@ -217,7 +226,7 @@ def create_app(service: ResearchSessionService) -> FastAPI:
 
     @app.post("/sessions", response_model=SessionResponse)
     async def create_session() -> SessionResponse:
-        return await service.create_session()
+        return await service.create_session(api_key=api_key, api_secret=api_secret)
 
     @app.get("/sessions/{session_id}", response_model=SessionResponse)
     async def get_session(session_id: str) -> SessionResponse:
@@ -229,36 +238,3 @@ def create_app(service: ResearchSessionService) -> FastAPI:
         return {"status": "ok"}
 
     return app
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Lucid research session server")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8081)
-    parser.add_argument("--log-level", default="info")
-    args = parser.parse_args()
-
-    numeric_level = getattr(logging, args.log_level.upper(), logging.INFO)
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
-    try:
-        ensure_model_module_loaded()
-        host_config = RuntimeConfig.from_env()
-    except (ConfigError, RuntimeError) as exc:
-        logging.getLogger("lucid.research").error("invalid configuration: %s", exc)
-        return 2
-
-    service = ResearchSessionService(host_config, logging.getLogger("lucid.research"))
-    app = create_app(service)
-
-    import uvicorn
-
-    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level.lower())
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

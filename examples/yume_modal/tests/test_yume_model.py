@@ -5,18 +5,13 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from pydantic import BaseModel
 import pytest
 
-from lucid import SessionContext
+from lucid import SessionContext, build_model_definition
 
 from yume_modal_example.config import YumeRuntimeConfig
 from yume_modal_example.engine import ChunkResult
 from yume_modal_example.model import YumeLucidModel
-
-
-class _PromptState(BaseModel):
-    prompt: str
 
 
 class _StubEngine:
@@ -46,13 +41,9 @@ class _StubEngine:
 
 def _runtime_config() -> YumeRuntimeConfig:
     return YumeRuntimeConfig(
-        livekit_url="wss://example.livekit.invalid",
-        frame_width=4,
-        frame_height=4,
+        frame_width=1280,
+        frame_height=720,
         target_fps=100,
-        status_topic="wm.status",
-        max_queue_frames=4,
-        livekit_mode="fake",
         wm_engine="fake",
         yume_model_dir=Path("/tmp/yume"),
         yume_chunk_frames=2,
@@ -61,25 +52,33 @@ def _runtime_config() -> YumeRuntimeConfig:
 
 
 def _build_model(engine: _StubEngine) -> YumeLucidModel:
-    model = YumeLucidModel({})
-    model.bind_runtime(_runtime_config(), logging.getLogger("tests.yume_model"))
+    model = YumeLucidModel(_runtime_config())
+    model.bind_runtime(None, logging.getLogger("tests.yume_model"))
     model._engine = engine
     return model
 
 
 def _frame(fill: int) -> np.ndarray:
-    return np.full((4, 4, 3), fill, dtype=np.uint8)
+    return np.full((720, 1280, 3), fill, dtype=np.uint8)
+
+
+def test_yume_manifest_exposes_inputs() -> None:
+    manifest = build_model_definition(YumeLucidModel).to_manifest()
+    input_names = {item["name"] for item in manifest["inputs"]}
+
+    assert {"set_prompt"}.issubset(input_names)
 
 
 @pytest.mark.asyncio
-async def test_start_session_drops_stale_chunk_when_prompt_changes_during_generation() -> None:
+async def test_session_drops_stale_chunk_when_prompt_changes_during_generation() -> None:
     published: list[np.ndarray] = []
     ctx: SessionContext | None = None
+    session = None
 
     async def generate_chunk(prompt: str, call_count: int) -> ChunkResult:
-        assert ctx is not None
+        assert session is not None
         if call_count == 1:
-            ctx.state.set("set_prompt", _PromptState(prompt="new prompt"))
+            session.set_prompt("new prompt")
             return ChunkResult(
                 frames=[_frame(10)],
                 chunk_ms=1.0,
@@ -103,12 +102,13 @@ async def test_start_session_drops_stale_chunk_when_prompt_changes_during_genera
     ctx = SessionContext(
         session_id="s1",
         room_name="wm-s1",
-        outputs=model.resolve_outputs((YumeLucidModel.main_video,)),
+        outputs=model.outputs,
         publish_fn=publish_fn,
         logger=logging.getLogger("tests.yume_model"),
     )
+    session = model.create_session(ctx)
 
-    await asyncio.wait_for(model.start_session(ctx), timeout=1.0)
+    await asyncio.wait_for(session.run(), timeout=1.0)
 
     assert [int(frame[0, 0, 0]) for frame in published] == [200]
     assert engine.start_prompts == ["old prompt"]
@@ -117,9 +117,10 @@ async def test_start_session_drops_stale_chunk_when_prompt_changes_during_genera
 
 
 @pytest.mark.asyncio
-async def test_start_session_stops_publishing_old_chunk_after_prompt_update() -> None:
+async def test_session_stops_publishing_old_chunk_after_prompt_update() -> None:
     published: list[np.ndarray] = []
     ctx: SessionContext | None = None
+    session = None
 
     async def generate_chunk(prompt: str, _call_count: int) -> ChunkResult:
         if prompt == "new prompt":
@@ -137,23 +138,47 @@ async def test_start_session_stops_publishing_old_chunk_after_prompt_update() ->
 
     async def publish_fn(_name: str, payload: object, _ts_ms: int | None) -> None:
         assert ctx is not None
+        assert session is not None
         frame = np.array(payload, copy=True)
         published.append(frame)
         if len(published) == 1:
-            ctx.state.set("set_prompt", _PromptState(prompt="new prompt"))
+            session.set_prompt("new prompt")
             return
         ctx.running = False
 
     ctx = SessionContext(
         session_id="s1",
         room_name="wm-s1",
-        outputs=model.resolve_outputs((YumeLucidModel.main_video,)),
+        outputs=model.outputs,
         publish_fn=publish_fn,
         logger=logging.getLogger("tests.yume_model"),
     )
+    session = model.create_session(ctx)
 
-    await asyncio.wait_for(model.start_session(ctx), timeout=1.0)
+    await asyncio.wait_for(session.run(), timeout=1.0)
 
     assert [int(frame[0, 0, 0]) for frame in published] == [10, 200]
     assert engine.updated_prompts == ["new prompt"]
     assert engine.generate_prompts == ["old prompt", "new prompt"]
+
+
+@pytest.mark.asyncio
+async def test_session_close_delegates_to_engine() -> None:
+    engine = _StubEngine(lambda _prompt, _count: asyncio.sleep(0))
+    model = _build_model(engine)
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=model.outputs,
+        publish_fn=_noop_publish,
+        logger=logging.getLogger("tests.yume_model"),
+    )
+    session = model.create_session(ctx)
+
+    await session.close()
+
+    assert engine.end_calls == 1
+
+
+async def _noop_publish(_name: str, _payload: object, _ts_ms: int | None) -> None:
+    return None

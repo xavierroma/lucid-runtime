@@ -1,285 +1,37 @@
 from __future__ import annotations
 
 import asyncio
-import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from time import perf_counter
 from typing import Annotated
 
 from pydantic import Field
 
-from lucid import SessionContext, VideoModel, action, model, publish
+from lucid import (
+    LoadContext,
+    LucidModel,
+    LucidSession,
+    SessionContext,
+    hold,
+    input,
+    pointer,
+    publish,
+    wheel,
+)
 
-from .config import WaypointRuntimeConfig, build_runtime_config
+from .config import WaypointRuntimeConfig
 from .engine import WaypointControlState, WaypointEngine
 
-
-@model(
-    name="waypoint",
-    config="configs/waypoint.yaml",
-    description="Realtime Waypoint world model runtime",
-)
-class WaypointLucidModel(VideoModel):
-    main_video = publish.video(
-        name="main_video",
-        width=640,
-        height=360,
-        fps=20,
-        pixel_format="rgb24",
-    )
-
-    def __init__(self, config: dict[str, object]) -> None:
-        super().__init__(config)
-        self._engine: WaypointEngine | None = None
-        self._compiler_cache_committed = False
-        self._transient_inputs: dict[str, _TransientWaypointInput] = {}
-        self._transient_inputs_lock = asyncio.Lock()
-
-    def resolve_outputs(self, outputs):
-        runtime_config = self.runtime_config
-        if not isinstance(runtime_config, WaypointRuntimeConfig):
-            raise RuntimeError("expected WaypointRuntimeConfig to be bound")
-        return (
-            publish.video(
-                name="main_video",
-                width=int(runtime_config.frame_width),
-                height=int(runtime_config.frame_height),
-                fps=int(runtime_config.target_fps),
-                pixel_format="rgb24",
-            ),
-        )
-
-    async def load(self) -> None:
-        if self._engine is not None:
-            return
-        if self.runtime_config is None or self.logger is None:
-            raise RuntimeError("runtime config must be bound before loading the model")
-        if not isinstance(self.runtime_config, WaypointRuntimeConfig):
-            raise RuntimeError("expected WaypointRuntimeConfig to be bound")
-        start = perf_counter()
-        self._engine = WaypointEngine(self.runtime_config, self.logger)
-        try:
-            await self._engine.load()
-        except Exception as exc:
-            self.logger.error(
-                "waypoint.model.load failed duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s error_type=%s",
-                (perf_counter() - start) * 1000.0,
-                self.runtime_config.frame_width,
-                self.runtime_config.frame_height,
-                self.runtime_config.target_fps,
-                exc.__class__.__name__,
-            )
-            raise
-        if self.runtime_config.waypoint_warmup_on_load:
-            self._compiler_cache_committed = await asyncio.to_thread(
-                _commit_compiler_cache_volume,
-                self.logger,
-                "post_warmup",
-            )
-        self.logger.info(
-            "waypoint.model.load complete duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s",
-            (perf_counter() - start) * 1000.0,
-            self.runtime_config.frame_width,
-            self.runtime_config.frame_height,
-            self.runtime_config.target_fps,
-        )
-
-    @action(
-        name="set_prompt",
-        description="Update the text prompt used by Waypoint.",
-        mode="state",
-    )
-    def set_prompt(
-        self,
-        prompt: Annotated[str, Field(..., min_length=1)],
-    ) -> None:
-        _ = prompt
-
-    @action(
-        name="set_buttons",
-        description="Set the held button IDs for Waypoint.",
-        mode="state",
-    )
-    def set_buttons(
-        self,
-        buttons: list[Annotated[int, Field(ge=0, le=255)]] = Field(default_factory=list),
-    ) -> None:
-        _ = buttons
-
-    @action(
-        name="mouse_move",
-        description="Apply a relative mouse movement delta for the next Waypoint frame.",
-        mode="command",
-    )
-    async def mouse_move(
-        self,
-        ctx: SessionContext,
-        dx: float = 0.0,
-        dy: float = 0.0,
-    ) -> None:
-        await self._append_transient_input(
-            ctx.session_id,
-            dx=float(dx),
-            dy=float(dy),
-        )
-
-    @action(
-        name="scroll",
-        description="Apply a relative scroll wheel delta for the next Waypoint frame.",
-        mode="command",
-    )
-    async def scroll(
-        self,
-        ctx: SessionContext,
-        amount: int = 0,
-    ) -> None:
-        await self._append_transient_input(
-            ctx.session_id,
-            scroll_amount=int(amount),
-        )
-
-    async def start_session(self, ctx: SessionContext) -> None:
-        if self._engine is None:
-            raise RuntimeError("model must be loaded before starting a session")
-        runtime_config = self.runtime_config
-        if not isinstance(runtime_config, WaypointRuntimeConfig):
-            raise RuntimeError("expected WaypointRuntimeConfig to be bound")
-
-        target_interval_s = 1.0 / max(int(runtime_config.target_fps), 1)
-        prompt = _resolve_prompt(ctx, runtime_config.waypoint_default_prompt)
-        start = perf_counter()
-        try:
-            await self._engine.start_session(prompt)
-        except Exception as exc:
-            ctx.logger.error(
-                "waypoint.model.start_session failed duration_ms=%.1f session_id=%s error_type=%s",
-                (perf_counter() - start) * 1000.0,
-                ctx.session_id,
-                exc.__class__.__name__,
-            )
-            raise
-        ctx.logger.info(
-            "waypoint.model.start_session engine_session_started elapsed_ms=%.1f session_id=%s prompt_chars=%s target_fps=%s frame_width=%s frame_height=%s",
-            (perf_counter() - start) * 1000.0,
-            ctx.session_id,
-            len(prompt),
-            runtime_config.target_fps,
-            runtime_config.frame_width,
-            runtime_config.frame_height,
-        )
-        last_prompt = prompt
-        frame_index = 0
-        try:
-            while ctx.running:
-                if ctx.paused:
-                    await asyncio.sleep(0.05)
-                    continue
-
-                loop_start_s = asyncio.get_running_loop().time()
-                prompt = _resolve_prompt(ctx, runtime_config.waypoint_default_prompt)
-                if prompt != last_prompt:
-                    await self._engine.update_prompt(prompt)
-                    last_prompt = prompt
-                    ctx.logger.info(
-                        "waypoint.model.start_session prompt_updated elapsed_ms=%.1f session_id=%s frame_index=%s prompt_chars=%s",
-                        (perf_counter() - start) * 1000.0,
-                        ctx.session_id,
-                        frame_index,
-                        len(prompt),
-                    )
-
-                controls = WaypointControlState(
-                    buttons=_resolve_buttons(ctx),
-                    **(await self._drain_transient_input(ctx.session_id)).as_control_kwargs(),
-                )
-                frame, inference_ms = await self._engine.generate_frame(controls)
-                ctx.record_inference_ms(inference_ms)
-                frame_index += 1
-                if frame_index == 1:
-                    ctx.logger.info(
-                        "waypoint.model.start_session first_frame_ready elapsed_ms=%.1f session_id=%s inference_ms=%.1f",
-                        (perf_counter() - start) * 1000.0,
-                        ctx.session_id,
-                        inference_ms,
-                    )
-                await ctx.publish("main_video", frame)
-                if frame_index == 1:
-                    ctx.logger.info(
-                        "waypoint.model.start_session first_frame_published elapsed_ms=%.1f session_id=%s",
-                        (perf_counter() - start) * 1000.0,
-                        ctx.session_id,
-                    )
-                    if not self._compiler_cache_committed:
-                        self._compiler_cache_committed = await asyncio.to_thread(
-                            _commit_compiler_cache_volume,
-                            ctx.logger,
-                            "first_frame",
-                        )
-
-                elapsed_s = asyncio.get_running_loop().time() - loop_start_s
-                if elapsed_s < target_interval_s:
-                    await asyncio.sleep(target_interval_s - elapsed_s)
-        except Exception as exc:
-            ctx.logger.error(
-                "waypoint.model.start_session failed duration_ms=%.1f session_id=%s frames_generated=%s inference_ms_p50=%.1f error_type=%s",
-                (perf_counter() - start) * 1000.0,
-                ctx.session_id,
-                frame_index,
-                ctx.inference_ms_p50(),
-                exc.__class__.__name__,
-            )
-            raise
-        ctx.logger.info(
-            "waypoint.model.start_session complete duration_ms=%.1f session_id=%s frames_generated=%s inference_ms_p50=%.1f",
-            (perf_counter() - start) * 1000.0,
-            ctx.session_id,
-            frame_index,
-            ctx.inference_ms_p50(),
-        )
-
-    async def end_session(self, ctx: SessionContext) -> None:
-        try:
-            if self._engine is not None:
-                await self._engine.end_session()
-        finally:
-            await self._clear_transient_input(ctx.session_id)
-            logger = self.logger or ctx.logger
-            if logger is not None:
-                self._compiler_cache_committed = (
-                    await asyncio.to_thread(_commit_compiler_cache_volume, logger, "session_end")
-                ) or self._compiler_cache_committed
-
-    async def _append_transient_input(
-        self,
-        session_id: str,
-        *,
-        dx: float = 0.0,
-        dy: float = 0.0,
-        scroll_amount: int = 0,
-    ) -> None:
-        async with self._transient_inputs_lock:
-            current = self._transient_inputs.setdefault(session_id, _TransientWaypointInput())
-            current.mouse_dx += dx
-            current.mouse_dy += dy
-            current.scroll_amount += scroll_amount
-
-    async def _drain_transient_input(self, session_id: str) -> "_TransientWaypointInput":
-        async with self._transient_inputs_lock:
-            current = self._transient_inputs.setdefault(session_id, _TransientWaypointInput())
-            drained = _TransientWaypointInput(
-                mouse_dx=current.mouse_dx,
-                mouse_dy=current.mouse_dy,
-                scroll_amount=current.scroll_amount,
-            )
-            current.mouse_dx = 0.0
-            current.mouse_dy = 0.0
-            current.scroll_amount = 0
-            return drained
-
-    async def _clear_transient_input(self, session_id: str) -> None:
-        async with self._transient_inputs_lock:
-            self._transient_inputs.pop(session_id, None)
+_VK_LBUTTON = 0x01
+_VK_RBUTTON = 0x02
+_VK_SPACE = 0x20
+_VK_A = 0x41
+_VK_D = 0x44
+_VK_S = 0x53
+_VK_W = 0x57
+_VK_LSHIFT = 0xA0
+_VK_LCONTROL = 0xA2
 
 
 @dataclass(slots=True)
@@ -288,57 +40,281 @@ class _TransientWaypointInput:
     mouse_dy: float = 0.0
     scroll_amount: int = 0
 
-    def as_control_kwargs(self) -> dict[str, float | int]:
-        return {
-            "mouse_dx": self.mouse_dx,
-            "mouse_dy": self.mouse_dy,
-            "scroll_amount": self.scroll_amount,
-        }
+    def drain(self) -> tuple[float, float, int]:
+        drained = (self.mouse_dx, self.mouse_dy, self.scroll_amount)
+        self.mouse_dx = 0.0
+        self.mouse_dy = 0.0
+        self.scroll_amount = 0
+        return drained
 
 
-def _resolve_prompt(ctx: SessionContext, default_prompt: str) -> str:
-    prompt_state = ctx.state.get("set_prompt")
-    prompt = default_prompt.strip() or default_prompt
-    if prompt_state is not None:
-        prompt = str(getattr(prompt_state, "prompt", default_prompt)).strip() or default_prompt
-    return prompt
+class WaypointSession(LucidSession["WaypointLucidModel"]):
+    def __init__(self, model: "WaypointLucidModel", ctx: SessionContext) -> None:
+        super().__init__(model, ctx)
+        self.prompt = model.config.waypoint_default_prompt
+        self._buttons: set[int] = set()
+        self._transient = _TransientWaypointInput()
 
+    @input(description="Update the text prompt used by Waypoint.")
+    def set_prompt(
+        self,
+        prompt: Annotated[str, Field(..., min_length=1)],
+    ) -> None:
+        self.prompt = prompt.strip() or self.model.config.waypoint_default_prompt
 
-def _resolve_buttons(ctx: SessionContext) -> frozenset[int]:
-    button_state = ctx.state.get("set_buttons")
-    if button_state is None:
-        return frozenset()
-    raw_buttons = getattr(button_state, "buttons", [])
-    return frozenset(int(button) for button in raw_buttons)
-
-
-def _commit_compiler_cache_volume(logger, reason: str = "session_end") -> bool:
-    volume_name = os.getenv("MODAL_HF_CACHE_VOLUME", "").strip()
-    cache_root = os.getenv("MODAL_COMPILER_CACHE_ROOT", "").strip()
-    if not volume_name or not cache_root or not Path(cache_root).exists():
-        return False
-
-    try:
-        import modal
-    except Exception:
-        return False
-
-    try:
-        modal.Volume.from_name(volume_name).commit()
-    except Exception as exc:
-        logger.warning(
-            "waypoint.model.compiler_cache_commit_failed volume=%s root=%s reason=%s error_type=%s",
-            volume_name,
-            cache_root,
-            reason,
-            exc.__class__.__name__,
-        )
-        return False
-
-    logger.info(
-        "waypoint.model.compiler_cache_committed volume=%s root=%s reason=%s",
-        volume_name,
-        cache_root,
-        reason,
+    @input(
+        description="Move forward.",
+        binding=hold(keys=("KeyW", "ArrowUp")),
     )
-    return True
+    def forward(self, pressed: bool) -> None:
+        self._set_button(_VK_W, pressed)
+
+    @input(
+        description="Move backward.",
+        binding=hold(keys=("KeyS", "ArrowDown")),
+    )
+    def backward(self, pressed: bool) -> None:
+        self._set_button(_VK_S, pressed)
+
+    @input(
+        description="Strafe left.",
+        binding=hold(keys=("KeyA", "ArrowLeft")),
+    )
+    def left(self, pressed: bool) -> None:
+        self._set_button(_VK_A, pressed)
+
+    @input(
+        description="Strafe right.",
+        binding=hold(keys=("KeyD", "ArrowRight")),
+    )
+    def right(self, pressed: bool) -> None:
+        self._set_button(_VK_D, pressed)
+
+    @input(
+        description="Jump.",
+        binding=hold(keys=("Space",)),
+    )
+    def jump(self, pressed: bool) -> None:
+        self._set_button(_VK_SPACE, pressed)
+
+    @input(
+        description="Sprint.",
+        binding=hold(keys=("ShiftLeft", "ShiftRight")),
+    )
+    def sprint(self, pressed: bool) -> None:
+        self._set_button(_VK_LSHIFT, pressed)
+
+    @input(
+        description="Crouch.",
+        binding=hold(keys=("ControlLeft", "ControlRight")),
+    )
+    def crouch(self, pressed: bool) -> None:
+        self._set_button(_VK_LCONTROL, pressed)
+
+    @input(
+        description="Primary fire.",
+        binding=hold(keys=("KeyJ",), mouse_buttons=(0,)),
+    )
+    def primary_fire(self, pressed: bool) -> None:
+        self._set_button(_VK_LBUTTON, pressed)
+
+    @input(
+        description="Secondary fire.",
+        binding=hold(keys=("KeyK",), mouse_buttons=(2,)),
+    )
+    def secondary_fire(self, pressed: bool) -> None:
+        self._set_button(_VK_RBUTTON, pressed)
+
+    @input(
+        description="Look around.",
+        binding=pointer(),
+    )
+    def look(self, dx: float, dy: float) -> None:
+        self._transient.mouse_dx += float(dx)
+        self._transient.mouse_dy += float(dy)
+
+    @input(
+        description="Scroll the wheel.",
+        binding=wheel(),
+    )
+    def scroll(self, delta: float) -> None:
+        self._transient.scroll_amount += int(delta)
+
+    async def run(self) -> None:
+        engine = self.model.require_engine()
+        target_interval_s = 1.0 / max(int(self.model.config.target_fps), 1)
+        start = perf_counter()
+        try:
+            await engine.start_session(self.prompt)
+        except Exception as exc:
+            self.ctx.logger.error(
+                "waypoint.session.run failed duration_ms=%.1f session_id=%s error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                self.ctx.session_id,
+                exc.__class__.__name__,
+            )
+            raise
+        self.ctx.logger.info(
+            "waypoint.session.run engine_session_started elapsed_ms=%.1f session_id=%s prompt_chars=%s target_fps=%s frame_width=%s frame_height=%s",
+            (perf_counter() - start) * 1000.0,
+            self.ctx.session_id,
+            len(self.prompt),
+            self.model.config.target_fps,
+            self.model.config.frame_width,
+            self.model.config.frame_height,
+        )
+        last_prompt = self.prompt
+        frame_index = 0
+        try:
+            while self.ctx.running:
+                loop_start_s = asyncio.get_running_loop().time()
+                prompt = self.prompt.strip() or self.model.config.waypoint_default_prompt
+                if prompt != last_prompt:
+                    await engine.update_prompt(prompt)
+                    last_prompt = prompt
+                    self.ctx.logger.info(
+                        "waypoint.session.run prompt_updated elapsed_ms=%.1f session_id=%s frame_index=%s prompt_chars=%s",
+                        (perf_counter() - start) * 1000.0,
+                        self.ctx.session_id,
+                        frame_index,
+                        len(prompt),
+                    )
+
+                mouse_dx, mouse_dy, scroll_amount = self._transient.drain()
+                controls = WaypointControlState(
+                    buttons=frozenset(self._buttons),
+                    mouse_dx=mouse_dx,
+                    mouse_dy=mouse_dy,
+                    scroll_amount=scroll_amount,
+                )
+                frame, inference_ms = await engine.generate_frame(controls)
+                self.ctx.record_inference_ms(inference_ms)
+                frame_index += 1
+                if frame_index == 1:
+                    self.ctx.logger.info(
+                        "waypoint.session.run first_frame_ready elapsed_ms=%.1f session_id=%s inference_ms=%.1f",
+                        (perf_counter() - start) * 1000.0,
+                        self.ctx.session_id,
+                        inference_ms,
+                    )
+                await self.ctx.publish("main_video", frame)
+                if frame_index == 1:
+                    self.ctx.logger.info(
+                        "waypoint.session.run first_frame_published elapsed_ms=%.1f session_id=%s",
+                        (perf_counter() - start) * 1000.0,
+                        self.ctx.session_id,
+                    )
+                    if (
+                        not self.model._compiler_cache_committed
+                        and self.model.compiler_cache_commit_hook is not None
+                    ):
+                        self.model._compiler_cache_committed = await asyncio.to_thread(
+                            self.model.compiler_cache_commit_hook,
+                            self.ctx.logger,
+                            "first_frame",
+                        )
+
+                elapsed_s = asyncio.get_running_loop().time() - loop_start_s
+                if elapsed_s < target_interval_s:
+                    await asyncio.sleep(target_interval_s - elapsed_s)
+        except Exception as exc:
+            self.ctx.logger.error(
+                "waypoint.session.run failed duration_ms=%.1f session_id=%s frames_generated=%s inference_ms_p50=%.1f error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                self.ctx.session_id,
+                frame_index,
+                self.ctx.inference_ms_p50(),
+                exc.__class__.__name__,
+            )
+            raise
+        self.ctx.logger.info(
+            "waypoint.session.run complete duration_ms=%.1f session_id=%s frames_generated=%s inference_ms_p50=%.1f",
+            (perf_counter() - start) * 1000.0,
+            self.ctx.session_id,
+            frame_index,
+            self.ctx.inference_ms_p50(),
+        )
+
+    async def close(self) -> None:
+        try:
+            engine = self.model._engine
+            if engine is not None:
+                await engine.end_session()
+        finally:
+            logger = self.model.logger or self.ctx.logger
+            if logger is not None and self.model.compiler_cache_commit_hook is not None:
+                self.model._compiler_cache_committed = (
+                    await asyncio.to_thread(
+                        self.model.compiler_cache_commit_hook,
+                        logger,
+                        "session_end",
+                    )
+                ) or self.model._compiler_cache_committed
+
+    def _set_button(self, button_id: int, pressed: bool) -> None:
+        if pressed:
+            self._buttons.add(button_id)
+            return
+        self._buttons.discard(button_id)
+
+
+class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
+    name = "waypoint"
+    description = "Realtime Waypoint world model runtime"
+    config_cls = WaypointRuntimeConfig
+    outputs = (
+        publish.video(
+            name="main_video",
+            width=640,
+            height=360,
+            fps=20,
+            pixel_format="rgb24",
+        ),
+    )
+    def __init__(self, config: WaypointRuntimeConfig) -> None:
+        super().__init__(config)
+        self._engine: WaypointEngine | None = None
+        self._compiler_cache_committed = False
+        self.compiler_cache_commit_hook: Callable[[object, str], bool] | None = None
+
+    async def load(self, ctx: LoadContext) -> None:
+        if self._engine is not None:
+            return
+        if self.logger is None:
+            raise RuntimeError("logger must be bound before loading the model")
+        engine_config = self.config
+        start = perf_counter()
+        self._engine = WaypointEngine(engine_config, self.logger)
+        try:
+            await self._engine.load()
+        except Exception as exc:
+            self.logger.error(
+                "waypoint.model.load failed duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                engine_config.frame_width,
+                engine_config.frame_height,
+                engine_config.target_fps,
+                exc.__class__.__name__,
+            )
+            raise
+        if engine_config.waypoint_warmup_on_load and self.compiler_cache_commit_hook is not None:
+            self._compiler_cache_committed = await asyncio.to_thread(
+                self.compiler_cache_commit_hook,
+                self.logger,
+                "post_warmup",
+            )
+        self.logger.info(
+            "waypoint.model.load complete duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s",
+            (perf_counter() - start) * 1000.0,
+            engine_config.frame_width,
+            engine_config.frame_height,
+            engine_config.target_fps,
+        )
+
+    def create_session(self, ctx: SessionContext) -> WaypointSession:
+        return WaypointSession(self, ctx)
+
+    def require_engine(self) -> WaypointEngine:
+        if self._engine is None:
+            raise RuntimeError("model must be loaded before starting a session")
+        return self._engine

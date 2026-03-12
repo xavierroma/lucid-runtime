@@ -3,26 +3,27 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lucid-runtime"
+name = "lucid-dev"
 version = "0.1.0"
-description = "Lucid runtime library for realtime world models"
+description = "Local dev server for Lucid world model runtimes"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "httpx>=0.27,<1",
-  "numpy>=1.26,<3",
+  "fastapi>=0.115,<1",
   "pydantic>=2.8,<3",
+  "PyYAML>=6,<7",
+  "uvicorn>=0.34,<0.35",
+  "lucid-runtime>=0.1,<0.2",
 ]
 
 [project.optional-dependencies]
-livekit = [
-  "livekit>=0.13,<0.14",
-  "av>=13,<14",
-]
 test = [
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<0.25",
 ]
+
+[project.scripts]
+lucid-dev = "lucid_dev.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -32,3 +33,6 @@ where = ["src"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+lucid-runtime = { path = "../lucid", editable = true }

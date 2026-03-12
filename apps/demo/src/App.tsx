@@ -1,12 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { LoaderCircle, Play, Power } from "lucide-react"
+import { LoaderCircle, Power } from "lucide-react"
 
-import {
-  ConsoleRoom,
-  type QueuedLaunch,
-  type QueuedMouseMove,
-  type QueuedScroll,
-} from "@/components/console-room"
+import { ConsoleRoom } from "@/components/console-room"
 import {
   EnvironmentStudio,
   type SaveEnvironmentInput,
@@ -35,12 +30,6 @@ import {
   persistSelectedEnvironmentId,
   type SavedEnvironment,
 } from "@/lib/environments"
-import {
-  sortUniqueButtonIds,
-  waypointButtonIdForKeyboardCode,
-  waypointButtonIdForPointerButton,
-  WAYPOINT_MOUSE_WHEEL_STEP,
-} from "@/lib/waypoint"
 
 type DemoModelName = "yume" | "waypoint"
 type DisplayTone = "off" | "warm" | "live" | "fault"
@@ -53,7 +42,6 @@ interface DisplayStatus {
 }
 
 const ENVIRONMENT_ROUTE: AppRoute = "/environments"
-type WaypointButtonSourceMap = Record<string, number>
 
 const MODEL_OPTIONS: Array<{
   name: DemoModelName
@@ -72,33 +60,9 @@ const MODEL_OPTIONS: Array<{
   },
 ]
 
-function hasPromptAction(capabilities: Capabilities | null) {
+function hasPromptInput(capabilities: Capabilities | null) {
   return Boolean(
-    capabilities?.manifest.actions.find((action) => action.name === "set_prompt"),
-  )
-}
-
-function hasWaypointButtonAction(capabilities: Capabilities | null) {
-  return Boolean(
-    capabilities?.manifest.actions.find((action) => action.name === "set_buttons"),
-  )
-}
-
-function hasWaypointMouseMoveAction(capabilities: Capabilities | null) {
-  return Boolean(
-    capabilities?.manifest.actions.find((action) => action.name === "mouse_move"),
-  )
-}
-
-function hasWaypointScrollAction(capabilities: Capabilities | null) {
-  return Boolean(
-    capabilities?.manifest.actions.find((action) => action.name === "scroll"),
-  )
-}
-
-function hasStartAction(capabilities: Capabilities | null) {
-  return Boolean(
-    capabilities?.manifest.actions.find((action) => action.name === "lucid.runtime.start"),
+    capabilities?.manifest.inputs.find((input) => input.name === "set_prompt"),
   )
 }
 
@@ -202,14 +166,6 @@ function buildDisplayStatus(args: {
     }
   }
 
-  if (session.state === "READY") {
-    return {
-      label: "READY",
-      detail: "Worker allocated. Pick a saved environment, then press Start.",
-      tone: "warm",
-    }
-  }
-
   if (trackReady) {
     return {
       label: "LIVE",
@@ -222,6 +178,14 @@ function buildDisplayStatus(args: {
     return {
       label: "SYNCING",
       detail: "Connected to LiveKit. Waiting for the first frame.",
+      tone: "warm",
+    }
+  }
+
+  if (session.state === "READY") {
+    return {
+      label: "READY",
+      detail: "Worker allocated. Session is warming up.",
       tone: "warm",
     }
   }
@@ -246,21 +210,14 @@ export function App() {
   )
   const [sessionResponse, setSessionResponse] = useState<SessionResponse | null>(null)
   const [sessionToken, setSessionToken] = useState<string | null>(null)
-  const [queuedLaunch, setQueuedLaunch] = useState<QueuedLaunch | null>(null)
   const [selectedModel, setSelectedModel] = useState<DemoModelName>(demoEnv.defaultModel)
-  const [waypointButtonSources, setWaypointButtonSources] =
-    useState<WaypointButtonSourceMap>({})
-  const [queuedMouseMove, setQueuedMouseMove] = useState<QueuedMouseMove | null>(null)
-  const [queuedScroll, setQueuedScroll] = useState<QueuedScroll | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [roomError, setRoomError] = useState<string | null>(null)
   const [createPending, setCreatePending] = useState(false)
   const [endPending, setEndPending] = useState(false)
-  const [startPending, setStartPending] = useState(false)
   const [roomConnected, setRoomConnected] = useState(false)
   const [trackReady, setTrackReady] = useState(false)
-  const actionNonceRef = useRef(0)
-  const waypointBindingTargetRef = useRef<HTMLDivElement | null>(null)
+  const interactionTargetRef = useRef<HTMLDivElement | null>(null)
 
   const session = sessionResponse?.session ?? null
   const capabilities = sessionResponse?.capabilities ?? null
@@ -274,21 +231,7 @@ export function App() {
   const hasActiveSession = Boolean(session && !isTerminalSessionState(session.state))
   const resolvedModel =
     normalizeModelName(capabilities?.manifest.model.name) ?? selectedModel
-  const promptSupported = hasPromptAction(capabilities)
-  const startSupported = hasStartAction(capabilities)
-  const waypointButtonsSupported = hasWaypointButtonAction(capabilities)
-  const waypointMouseMoveSupported = hasWaypointMouseMoveAction(capabilities)
-  const waypointScrollSupported = hasWaypointScrollAction(capabilities)
-  const waypointModelActive = resolvedModel === "waypoint"
-  const waypointButtonIds = useMemo(
-    () => sortUniqueButtonIds(Object.values(waypointButtonSources)),
-    [waypointButtonSources],
-  )
-  const canStartSession = Boolean(
-    session?.state === "READY" &&
-      startSupported &&
-      (!promptSupported || selectedEnvironmentPrompt),
-  )
+  const promptSupported = hasPromptInput(capabilities)
   const status = buildDisplayStatus({
     session,
     modelName: resolvedModel,
@@ -349,10 +292,6 @@ export function App() {
     if (!session?.session_id || isTerminalSessionState(session.state)) {
       setRoomConnected(false)
       setTrackReady(false)
-      if (isTerminalSessionState(session?.state ?? "ENDED")) {
-        setStartPending(false)
-        setQueuedLaunch(null)
-      }
       return
     }
 
@@ -386,154 +325,6 @@ export function App() {
       window.clearInterval(intervalId)
     }
   }, [session?.session_id, session?.state])
-
-  const nextActionNonce = () => {
-    actionNonceRef.current += 1
-    return actionNonceRef.current
-  }
-
-  const setWaypointButtonSource = (
-    sourceId: string,
-    pressed: boolean,
-    buttonId: number,
-  ) => {
-    setWaypointButtonSources((current) => {
-      if (pressed) {
-        if (current[sourceId] === buttonId) {
-          return current
-        }
-        return {
-          ...current,
-          [sourceId]: buttonId,
-        }
-      }
-
-      if (!(sourceId in current)) {
-        return current
-      }
-
-      const next = { ...current }
-      delete next[sourceId]
-      return next
-    })
-  }
-
-  useEffect(() => {
-    if (hasActiveSession && waypointModelActive) {
-      return
-    }
-    setWaypointButtonSources({})
-    setQueuedMouseMove(null)
-    setQueuedScroll(null)
-  }, [hasActiveSession, waypointModelActive])
-
-  useEffect(() => {
-    if (!hasActiveSession || !waypointButtonsSupported || resolvedModel !== "waypoint") {
-      return
-    }
-
-    const isEditableTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) {
-        return false
-      }
-      const tagName = target.tagName
-      return tagName === "TEXTAREA" || tagName === "INPUT" || target.isContentEditable
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) {
-        return
-      }
-
-      const buttonId = waypointButtonIdForKeyboardCode(event.code)
-      if (buttonId === null) {
-        return
-      }
-
-      event.preventDefault()
-      setWaypointButtonSource(`keyboard:${event.code}`, true, buttonId)
-    }
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      const buttonId = waypointButtonIdForKeyboardCode(event.code)
-      if (buttonId === null) {
-        return
-      }
-
-      setWaypointButtonSource(`keyboard:${event.code}`, false, buttonId)
-    }
-
-    window.addEventListener("keydown", handleKeyDown)
-    window.addEventListener("keyup", handleKeyUp)
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown)
-      window.removeEventListener("keyup", handleKeyUp)
-    }
-  }, [hasActiveSession, resolvedModel, waypointButtonsSupported])
-
-  useEffect(() => {
-    if (!hasActiveSession || resolvedModel !== "waypoint") {
-      return
-    }
-
-    const bindingTarget = waypointBindingTargetRef.current
-    if (!bindingTarget) {
-      return
-    }
-
-    const releasePointerButtons = () => {
-      for (const button of [0, 2]) {
-        const buttonId = waypointButtonIdForPointerButton(button)
-        if (buttonId !== null) {
-          setWaypointButtonSource(`mouse:${button}`, false, buttonId)
-        }
-      }
-    }
-
-    const isPointerLockedToTarget = () => document.pointerLockElement === bindingTarget
-
-    const handleMouseMove = (event: MouseEvent) => {
-      if (!waypointMouseMoveSupported || !isPointerLockedToTarget()) {
-        return
-      }
-      if (event.movementX === 0 && event.movementY === 0) {
-        return
-      }
-      setQueuedMouseMove({
-        nonce: nextActionNonce(),
-        dx: event.movementX,
-        dy: event.movementY,
-      })
-    }
-
-    const handleMouseUp = (event: MouseEvent) => {
-      const buttonId = waypointButtonIdForPointerButton(event.button)
-      if (buttonId === null) {
-        return
-      }
-      setWaypointButtonSource(`mouse:${event.button}`, false, buttonId)
-    }
-
-    const handlePointerLockChange = () => {
-      if (!isPointerLockedToTarget()) {
-        releasePointerButtons()
-      }
-    }
-
-    document.addEventListener("mousemove", handleMouseMove)
-    document.addEventListener("mouseup", handleMouseUp)
-    document.addEventListener("pointerlockchange", handlePointerLockChange)
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove)
-      document.removeEventListener("mouseup", handleMouseUp)
-      document.removeEventListener("pointerlockchange", handlePointerLockChange)
-      releasePointerButtons()
-    }
-  }, [
-    hasActiveSession,
-    resolvedModel,
-    waypointMouseMoveSupported,
-  ])
 
   const navigateTo = (nextRoute: AppRoute) => {
     if (window.location.pathname !== nextRoute) {
@@ -590,8 +381,6 @@ export function App() {
     setCreatePending(true)
     setRequestError(null)
     setRoomError(null)
-    setStartPending(false)
-    setQueuedLaunch(null)
     setRoomConnected(false)
     setTrackReady(false)
 
@@ -639,22 +428,6 @@ export function App() {
     await handleEndSession()
   }
 
-  const handleStart = () => {
-    if (!canStartSession) {
-      if (promptSupported && !selectedEnvironmentPrompt) {
-        setRequestError("Choose a saved environment before starting the session.")
-      }
-      return
-    }
-
-    setRequestError(null)
-    setStartPending(true)
-    setQueuedLaunch({
-      nonce: nextActionNonce(),
-      prompt: promptSupported ? selectedEnvironmentPrompt : null,
-    })
-  }
-
   if (route === ENVIRONMENT_ROUTE) {
     return (
       <EnvironmentStudio
@@ -685,19 +458,6 @@ export function App() {
             </button>
             <button
               type="button"
-              className="start-button"
-              onClick={handleStart}
-              disabled={!canStartSession || startPending || createPending || endPending}
-            >
-              {startPending ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <Play className="size-4" />
-              )}
-              Start
-            </button>
-            <button
-              type="button"
               className={`power-button ${hasActiveSession ? "power-button-on" : ""}`}
               onClick={() => void handlePowerToggle()}
               disabled={createPending || endPending}
@@ -717,61 +477,13 @@ export function App() {
               {status.label}
             </div>
 
-            <div
-              ref={waypointBindingTargetRef}
-              className="console-screen"
-              onContextMenu={(event) => {
-                if (waypointModelActive && hasActiveSession) {
-                  event.preventDefault()
-                }
-              }}
-              onMouseDown={(event) => {
-                if (!waypointModelActive || !hasActiveSession) {
-                  return
-                }
-
-                const buttonId = waypointButtonIdForPointerButton(event.button)
-                if (buttonId !== null && waypointButtonsSupported) {
-                  event.preventDefault()
-                  setWaypointButtonSource(`mouse:${event.button}`, true, buttonId)
-                }
-
-                if (
-                  waypointMouseMoveSupported &&
-                  document.pointerLockElement !== event.currentTarget
-                ) {
-                  event.preventDefault()
-                  void event.currentTarget.requestPointerLock()
-                }
-              }}
-              onWheel={(event) => {
-                if (
-                  !waypointModelActive ||
-                  !hasActiveSession ||
-                  !waypointScrollSupported ||
-                  event.deltaY === 0
-                ) {
-                  return
-                }
-
-                event.preventDefault()
-                setQueuedScroll({
-                  nonce: nextActionNonce(),
-                  amount:
-                    event.deltaY < 0
-                      ? WAYPOINT_MOUSE_WHEEL_STEP
-                      : -WAYPOINT_MOUSE_WHEEL_STEP,
-                })
-              }}
-            >
+            <div ref={interactionTargetRef} className="console-screen">
               <ConsoleRoom
                 session={session}
                 token={sessionToken}
                 capabilities={capabilities}
-                queuedLaunch={queuedLaunch}
-                pressedButtonIds={waypointButtonIds}
-                queuedMouseMove={queuedMouseMove}
-                queuedScroll={queuedScroll}
+                promptValue={promptSupported ? selectedEnvironmentPrompt : null}
+                interactionTargetRef={interactionTargetRef}
                 fallback={
                   <div className="screen-fallback">
                     <p className="screen-fallback-kicker">{status.label}</p>
@@ -780,15 +492,7 @@ export function App() {
                 }
                 onConnectionChange={setRoomConnected}
                 onTrackReadyChange={setTrackReady}
-                onLaunchSent={() => {
-                  setStartPending(false)
-                  setQueuedLaunch(null)
-                  setRequestError(null)
-                }}
-                onActionError={(message) => {
-                  setStartPending(false)
-                  setRequestError(message)
-                }}
+                onActionError={setRequestError}
                 onRoomError={setRoomError}
               />
             </div>
@@ -825,7 +529,12 @@ export function App() {
                       >
                         <SelectValue placeholder="Choose environment" />
                       </SelectTrigger>
-                      <SelectContent align="start" position="popper" sideOffset={8} className="shadow-none">
+                      <SelectContent
+                        align="start"
+                        position="popper"
+                        sideOffset={8}
+                        className="shadow-none"
+                      >
                         {environments.map((environment) => (
                           <SelectItem
                             key={environment.id}
@@ -840,7 +549,7 @@ export function App() {
                   </div>
 
                   <div className="environment-preview">
-                    <p className="environment-preview-kicker">Prompt submitted on start</p>
+                    <p className="environment-preview-kicker">Prompt synced to the session</p>
                     <p className="environment-preview-copy">
                       {selectedEnvironment?.prompt}
                     </p>
@@ -851,7 +560,7 @@ export function App() {
                   <p>No saved environments yet.</p>
                   <p>
                     Create one on the environments route, then come back here to
-                    launch it.
+                    power on a session.
                   </p>
                 </div>
               )}
@@ -874,7 +583,12 @@ export function App() {
                 >
                   <SelectValue placeholder="Model" />
                 </SelectTrigger>
-                <SelectContent align="start" position="popper" sideOffset={8} className="shadow-none">
+                <SelectContent
+                  align="start"
+                  position="popper"
+                  sideOffset={8}
+                  className="shadow-none"
+                >
                   {MODEL_OPTIONS.map((option) => (
                     <SelectItem key={option.name} value={option.name} className="text-sm">
                       {option.fullLabel}

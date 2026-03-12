@@ -1,44 +1,65 @@
 from __future__ import annotations
 
 import importlib
-import os
+import inspect
 from types import ModuleType
-from typing import Any
+from typing import Any, TypeAlias
 
+
+ModelTarget: TypeAlias = str | type[Any]
 
 _loaded_modules: dict[str, ModuleType] = {}
+_loaded_model_classes: dict[str | type[Any], type[Any]] = {}
 
 
-def configured_model_module() -> str:
-    configured = os.getenv("WM_MODEL_MODULE", "").strip()
-    if not configured:
-        raise RuntimeError("WM_MODEL_MODULE is required")
-    return configured
+def _split_model_spec(model_spec: str) -> tuple[str, str]:
+    module_name, _, class_name = model_spec.partition(":")
+    resolved_module_name = module_name.strip()
+    resolved_class_name = class_name.strip()
+    if not resolved_module_name or not resolved_class_name:
+        raise RuntimeError(
+            f"invalid lucid model spec {model_spec!r}; expected 'pkg.module:ClassName'"
+        )
+    return resolved_module_name, resolved_class_name
 
 
-def load_model_module(module_name: str | None = None) -> ModuleType:
-    resolved_name = module_name or configured_model_module()
-    loaded = _loaded_modules.get(resolved_name)
+def load_model_module(model: ModelTarget) -> ModuleType:
+    if inspect.isclass(model):
+        module_name = model.__module__
+    elif isinstance(model, str):
+        module_name, _class_name = _split_model_spec(model)
+    else:
+        raise RuntimeError(f"invalid lucid model target: {model!r}")
+
+    loaded = _loaded_modules.get(module_name)
     if loaded is not None:
         return loaded
-    module = importlib.import_module(resolved_name)
-    _loaded_modules[resolved_name] = module
+
+    module = importlib.import_module(module_name)
+    _loaded_modules[module_name] = module
     return module
 
 
-def ensure_model_module_loaded(module_name: str | None = None) -> str:
-    return load_model_module(module_name).__name__
+def resolve_model_class(model: ModelTarget) -> type[Any]:
+    loaded = _loaded_model_classes.get(model)
+    if loaded is not None:
+        return loaded
 
+    if inspect.isclass(model):
+        candidate = model
+    elif isinstance(model, str):
+        module_name, class_name = _split_model_spec(model)
+        module = load_model_module(model)
+        candidate = getattr(module, class_name, None)
+        if candidate is None:
+            raise RuntimeError(f"lucid model class not found: {module_name}:{class_name}")
+    else:
+        raise RuntimeError(f"invalid lucid model target: {model!r}")
 
-def configured_model_packages(module_name: str | None = None) -> tuple[str, ...]:
-    resolved_name = module_name or configured_model_module()
-    package_name = resolved_name.split(".", 1)[0].strip()
-    return (package_name,) if package_name else ()
+    from .runtime import LucidModel
 
+    if not inspect.isclass(candidate) or not issubclass(candidate, LucidModel) or candidate is LucidModel:
+        raise RuntimeError(f"lucid model target must be a LucidModel subclass: {model!r}")
 
-def build_model_runtime_config(host_config: Any, module_name: str | None = None) -> Any:
-    module = load_model_module(module_name)
-    builder = getattr(module, "build_runtime_config", None)
-    if builder is None:
-        return host_config
-    return builder(host_config)
+    _loaded_model_classes[model] = candidate
+    return candidate

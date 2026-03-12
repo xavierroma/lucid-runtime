@@ -1,33 +1,30 @@
 # Waypoint on Modal
 
-This example shows a Lucid port of [Overworld/Waypoint-1.1-Small](https://huggingface.co/Overworld/Waypoint-1.1-Small) deployed on Modal.
+This example shows the current package split in practice:
 
-- The reusable runtime and hosting code lives in [`packages/lucid`](../../packages/lucid).
-- The Waypoint-specific port lives in [`src/waypoint_modal_example`](src/waypoint_modal_example).
+- [`packages/lucid`](../../packages/lucid) owns the reusable runtime contract.
+- [`packages/lucid-modal`](../../packages/lucid-modal) owns the Modal worker, dispatch API, and shared Modal boilerplate.
+- [`src/waypoint_modal_example`](src/waypoint_modal_example) owns the Waypoint-specific model code and the thin Modal wrapper.
 
-## What is the Lucid port
+## Port boundary
 
-The Lucid-specific code is intentionally small:
+The example-specific Lucid code is intentionally small:
 
-- [`model.py`](src/waypoint_modal_example/model.py) declares the model, publishes `main_video`, exposes prompt + control actions, and runs the session loop.
-- [`config.py`](src/waypoint_modal_example/config.py) adapts generic Lucid host config into Waypoint-specific runtime config.
-- [`modal_app.py`](src/waypoint_modal_example/modal_app.py) defines the Modal image and calls `lucid.modal.create_app(...)`.
+- [`model.py`](src/waypoint_modal_example/model.py) defines `WaypointLucidModel` and `WaypointSession`.
+- [`config.py`](src/waypoint_modal_example/config.py) defines the model config loaded by the example.
+- [`modal_app.py`](src/waypoint_modal_example/modal_app.py) defines only the Waypoint-specific Modal image, env, volumes, and hooks, then delegates worker wiring to `lucid_modal.create_app(...)`.
 
-That is the part you rewrite when you port a new model into Lucid.
+[`engine.py`](src/waypoint_modal_example/engine.py) is ordinary model-serving code. It wraps the upstream `world_engine.WorldEngine`, keeps CUDA work on a dedicated thread, seeds the model with a starter frame, and converts generated frames into Lucid-ready `numpy.uint8` RGB frames.
 
-## What is just the model
+## Runtime contract
 
-[`engine.py`](src/waypoint_modal_example/engine.py) is ordinary model-serving code. It wraps the official `world_engine.WorldEngine` API, keeps CUDA work on a dedicated thread, seeds the model with a starter frame, and converts generated frames into Lucid-ready `numpy.uint8` RGB frames.
+The Waypoint example exposes:
 
-## Current Waypoint Lucid model
-
-The example exposes:
-
-- `set_prompt`: persistent text conditioning
-- `set_buttons`: persistent held Owl-Control / Windows virtual-key button IDs
-- `mouse_move`: transient relative look deltas applied to the next frame
-- `scroll`: transient relative scroll wheel input applied to the next frame
-- `main_video`: the generated RGB video stream
+- one manual input: `set_prompt`
+- hold bindings for movement, jump, sprint, crouch, and mouse buttons
+- a pointer binding for relative look deltas
+- a wheel binding for scroll input
+- one output: `main_video`
 
 The default output size is `640x360`, which matches the current Waypoint 1.x legacy-model path used by Overworld's Biome server.
 
@@ -47,99 +44,50 @@ uv run --project examples/waypoint_modal --extra test pytest examples/waypoint_m
 
 ## Deploy on Modal
 
-This example owns its own Modal deployment module at
-[`modal_app.py`](src/waypoint_modal_example/modal_app.py).
+This example keeps its Modal entrypoint in
+[`modal_app.py`](src/waypoint_modal_example/modal_app.py), but the shared Modal runtime now lives in `lucid-modal`.
 
-Copy the example env file, then create Modal volumes, download the model, and deploy:
+Copy the example env file, then create volumes, download the checkpoints, and deploy:
 
 ```bash
-cp examples/waypoint_modal/modal.env.example deploy/modal/waypoint.env
-deploy/modal/create-volumes.sh --env-file deploy/modal/waypoint.env
-deploy/modal/download-model.sh --env-file deploy/modal/waypoint.env
-deploy/modal/deploy.sh --env-file deploy/modal/waypoint.env
+cp examples/waypoint_modal/modal.env.example .env.waypoint
+uv run --project packages/lucid-modal lucid-modal create-volumes --env-file .env.waypoint
+uv run --project packages/lucid-modal lucid-modal download-model --env-file .env.waypoint
+uv run --project packages/lucid-modal lucid-modal deploy --env-file .env.waypoint
 ```
 
-Required env for the deployed example:
+The required example-owned env is now the model/runtime config itself:
 
 ```bash
 MODAL_PROJECT_PATH=examples/waypoint_modal
 MODAL_PROJECT_SRC=examples/waypoint_modal/src
 MODAL_APP_ENTRYPOINT=examples/waypoint_modal/src/waypoint_modal_example/modal_app.py
+MODAL_APP_NAME=lucid-waypoint-worker
+MODAL_GPU=RTX-PRO-6000
+MODAL_MODEL_VOLUME=lucid-waypoint-models
+MODAL_HF_CACHE_VOLUME=lucid-hf-cache
 MODAL_STARTUP_TIMEOUT_SECS=2400
 MODAL_COMPILER_CACHE_ROOT=/cache/huggingface/compiler/waypoint/rtx-pro-6000
-WM_MODEL_MODULE=waypoint_modal_example.model
-WM_MODEL_NAME=waypoint
 WM_ENGINE=waypoint
 WAYPOINT_MODEL_SOURCE=/models/Waypoint-1.1-Small
+WAYPOINT_AE_SOURCE=/models/owl_vae_f16_c16_distill_v0_nogan
+WAYPOINT_PROMPT_ENCODER_SOURCE=/models/google-umt5-xl
 WAYPOINT_WARMUP_ON_LOAD=0
 ```
 
-The Waypoint model card recommends an RTX 5090 for roughly `20-30 FPS` or an RTX 6000 Pro Blackwell for roughly `35 FPS` when running locally. This example defaults to `MODAL_GPU=RTX-PRO-6000` and keeps the compiler caches under a GPU-specific directory so RTX PRO 6000 containers reuse their own `torch.compile` artifacts instead of mixing them with another accelerator type. If you want a cheaper starting point, try `L40S` first and only move up if startup time or frame rate is not acceptable.
+The Waypoint model card recommends an RTX 5090 for roughly `20-30 FPS` or an RTX 6000 Pro Blackwell for roughly `35 FPS` when running locally. This example defaults to `MODAL_GPU=RTX-PRO-6000` and keeps compiler caches under a GPU-specific directory so RTX PRO 6000 containers reuse their own `torch.compile` artifacts instead of mixing them with another accelerator type. If you want a cheaper starting point, try `L40S` first and only move up if startup time or frame rate is not acceptable.
 
-`world_engine` compiles and autotunes kernels on the first generated frame. In this example, `WAYPOINT_WARMUP_ON_LOAD=0` skips that first-frame warmup during Modal container startup so the worker can come up inside Modal's startup deadline. The tradeoff is that the first generated frame of a fresh container will still pay the compile/autotune cost. The compiled Triton, Inductor, and CUDA driver caches are written under `MODAL_COMPILER_CACHE_ROOT` on the mounted cache volume, and the session teardown now commits that volume so later RTX PRO 6000 containers can reuse the first successful compile. The example timeout now defaults to 2400 seconds (40 minutes); if you want eager warm containers instead, set `WAYPOINT_WARMUP_ON_LOAD=1` and keep `MODAL_STARTUP_TIMEOUT_SECS` high enough to cover the one-time compile.
+`world_engine` compiles and autotunes kernels on the first generated frame. In this example, `WAYPOINT_WARMUP_ON_LOAD=0` skips that first-frame warmup during Modal container startup so the worker can come up inside Modal's startup deadline. The tradeoff is that the first generated frame of a fresh container still pays the compile/autotune cost. The compiled Triton, Inductor, and CUDA driver caches are written under `MODAL_COMPILER_CACHE_ROOT` on the mounted cache volume, and the example commits that volume after the first successful frame so later containers can reuse the compile.
 
-For debugging a `device-side assert`, set `CUDA_LAUNCH_BLOCKING=1` in the Modal env file, redeploy, and rerun the session. That forces CUDA failures to surface at the kernel that triggered them instead of later during `end_session()`.
+For debugging a `device-side assert`, set `CUDA_LAUNCH_BLOCKING=1` in the env file, redeploy, and rerun the session. That forces CUDA failures to surface at the kernel that triggered them instead of later during teardown.
 
 ## Run through the demo
 
-Start the local coordinator with the deployed Modal dispatch URL and your LiveKit credentials,
-then run the demo app:
+Start the local coordinator with the deployed Modal dispatch URL and your LiveKit credentials, then run the demo app:
 
 ```bash
 cargo run -p coordinator
 cd apps/demo && bun run dev
 ```
 
-The demo renders the Lucid manifest, exposes the generated `main_video` output, and now mounts a Waypoint control deck that emits upstream-style button, mouse, and scroll actions.
-
-Example `set_buttons` control message:
-
-```json
-{
-  "type": "action",
-  "seq": 1,
-  "ts_ms": 1741315200000,
-  "session_id": "3acb0b65-7b3c-4ebb-8e98-9e18dbf7403f",
-  "payload": {
-    "name": "set_buttons",
-    "args": {
-      "buttons": [87, 160]
-    }
-  }
-}
-```
-
-Example `mouse_move` control message:
-
-```json
-{
-  "type": "action",
-  "seq": 2,
-  "ts_ms": 1741315200100,
-  "session_id": "3acb0b65-7b3c-4ebb-8e98-9e18dbf7403f",
-  "payload": {
-    "name": "mouse_move",
-    "args": {
-      "dx": 14,
-      "dy": -6
-    }
-  }
-}
-```
-
-Example `scroll` control message:
-
-```json
-{
-  "type": "action",
-  "seq": 3,
-  "ts_ms": 1741315200200,
-  "session_id": "3acb0b65-7b3c-4ebb-8e98-9e18dbf7403f",
-  "payload": {
-    "name": "scroll",
-    "args": {
-      "amount": 120
-    }
-  }
-}
-```
+The demo renders the generated manifest, subscribes to `main_video`, and registers only the keyboard and mouse listeners declared by the Waypoint input bindings.

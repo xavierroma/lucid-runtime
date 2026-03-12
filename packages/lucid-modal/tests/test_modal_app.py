@@ -4,7 +4,7 @@ import base64
 import json
 from types import SimpleNamespace
 
-from lucid.modal import (
+from lucid_modal import (
     FunctionCallStatus,
     LaunchRequest,
     ModalSessionDispatcher,
@@ -71,7 +71,7 @@ def test_modal_dispatcher_cancel_passes_force(monkeypatch) -> None:
             calls.append(("cancel", terminate_containers))
 
     monkeypatch.setattr(
-        "lucid.modal.modal.FunctionCall.from_id",
+        "lucid_modal.app.modal.FunctionCall.from_id",
         lambda function_call_id: calls.append((function_call_id, False)) or FakeFunctionCall(),
     )
 
@@ -87,7 +87,7 @@ def test_modal_dispatcher_status_reads_call_graph(monkeypatch) -> None:
             return [SimpleNamespace(status="InputStatus.FAILURE", parent_input_id=None)]
 
     monkeypatch.setattr(
-        "lucid.modal.modal.FunctionCall.from_id",
+        "lucid_modal.app.modal.FunctionCall.from_id",
         lambda _function_call_id: FakeFunctionCall(),
     )
 
@@ -115,7 +115,7 @@ def test_modal_dispatcher_status_prefers_matching_child_call(monkeypatch) -> Non
             ]
 
     monkeypatch.setattr(
-        "lucid.modal.modal.FunctionCall.from_id",
+        "lucid_modal.app.modal.FunctionCall.from_id",
         lambda _function_call_id: FakeFunctionCall(),
     )
 
@@ -145,7 +145,7 @@ def test_spawn_session_call_looks_up_worker_class(monkeypatch) -> None:
         return FakeWorkerClass()
 
     monkeypatch.setattr(
-        "lucid.modal.modal",
+        "lucid_modal.app.modal",
         SimpleNamespace(Cls=SimpleNamespace(from_name=fake_from_name)),
     )
 

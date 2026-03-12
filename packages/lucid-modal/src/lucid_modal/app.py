@@ -1,21 +1,21 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from .config import RuntimeConfig, SessionConfig
-from .discovery import build_model_runtime_config, ensure_model_module_loaded
-from .host import SessionRunner
-from .livekit import mint_access_token
-from .runtime import LucidRuntime
-from .types import Assignment
+from lucid import LucidRuntime, ModelTarget, SessionConfig, SessionRunner, mint_access_token
+from lucid.types import Assignment
+
+from .config import load_runtime_config_from_env
 
 try:  # pragma: no cover - depends on optional dependency
     import modal  # type: ignore
@@ -23,15 +23,99 @@ except Exception:  # pragma: no cover - depends on optional dependency
     class _MissingFunctionCall:
         @staticmethod
         def from_id(_function_call_id: str):
-            raise RuntimeError("modal package is missing; install lucid[modal]")
+            raise RuntimeError("modal package is missing; install lucid-modal")
 
     class _MissingModal:
         FunctionCall = _MissingFunctionCall
 
         def __getattr__(self, _name: str) -> object:
-            raise RuntimeError("modal package is missing; install lucid[modal]")
+            raise RuntimeError("modal package is missing; install lucid-modal")
 
     modal = _MissingModal()  # type: ignore[assignment]
+
+RuntimeSetup = Callable[[LucidRuntime, logging.Logger], Awaitable[None] | None]
+ModelConfigLoader = Callable[[], BaseModel | dict[str, Any] | None]
+
+_LOCAL_IGNORE_PARTS = {"__pycache__", ".pytest_cache", ".venv", "build", "dist"}
+
+
+def ignore_local_artifacts(path: Path) -> bool:
+    if any(part in _LOCAL_IGNORE_PARTS for part in path.parts):
+        return True
+    if any(part.endswith(".egg-info") for part in path.parts):
+        return True
+    return path.suffix in {".pyc", ".pyo"}
+
+
+def with_lucid_runtime(
+    image,
+    *,
+    include_livekit: bool = True,
+    extra_local_dirs: list[tuple[str, str]] | None = None,
+):
+    runtime_dep = "/workspace/packages/lucid[livekit]" if include_livekit else "/workspace/packages/lucid"
+    updated = (
+        image.apt_install("ffmpeg", "ca-certificates")
+        .add_local_dir(
+            "packages/lucid",
+            "/workspace/packages/lucid",
+            copy=True,
+            ignore=ignore_local_artifacts,
+        )
+        .add_local_dir(
+            "packages/lucid-modal",
+            "/workspace/packages/lucid-modal",
+            copy=True,
+            ignore=ignore_local_artifacts,
+        )
+    )
+    for src, dest in extra_local_dirs or []:
+        updated = updated.add_local_dir(src, dest, copy=True, ignore=ignore_local_artifacts)
+    return updated.run_commands(
+        f"python -m pip install '{runtime_dep}'",
+        "python -m pip install /workspace/packages/lucid-modal",
+    )
+
+
+def env_secret(*names: str):
+    payload = {}
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            payload[name] = value
+    return modal.Secret.from_dict(payload)
+
+
+def build_modal_volume_commit_hook(
+    *,
+    volume_env: str = "MODAL_HF_CACHE_VOLUME",
+    root_env: str = "MODAL_COMPILER_CACHE_ROOT",
+) -> Callable[[logging.Logger, str], bool]:
+    def _commit(logger: logging.Logger, reason: str) -> bool:
+        volume_name = os.getenv(volume_env, "").strip()
+        cache_root = os.getenv(root_env, "").strip()
+        if not volume_name or not cache_root or not Path(cache_root).exists():
+            return False
+        try:
+            modal.Volume.from_name(volume_name).commit()
+        except Exception as exc:
+            logger.warning(
+                "modal.volume.commit_failed volume=%s root=%s reason=%s error_type=%s",
+                volume_name,
+                cache_root,
+                reason,
+                exc.__class__.__name__,
+            )
+            return False
+        logger.info(
+            "modal.volume.committed volume=%s root=%s reason=%s",
+            volume_name,
+            cache_root,
+            reason,
+        )
+        return True
+
+    return _commit
 
 
 class LaunchRequest(BaseModel):
@@ -218,9 +302,12 @@ class ModalAppBundle:
 def create_app(
     *,
     app_name: str,
+    model: ModelTarget,
     image,
     gpu: str,
     secrets: list[Any],
+    model_config_loader: ModelConfigLoader | None = None,
+    runtime_setup: RuntimeSetup | None = None,
     min_containers: int = 1,
     max_containers: int = 1,
     scaledown_window_secs: int = 1200,
@@ -228,8 +315,8 @@ def create_app(
     startup_timeout_seconds: int = 20 * 60,
     volumes: dict[str, Any] | None = None,
     dispatch_token: str = "",
-    runtime_config_loader=RuntimeConfig.from_env,
-    logger_name: str = "lucid.modal",
+    runtime_config_loader=load_runtime_config_from_env,
+    logger_name: str = "lucid_modal",
 ) -> ModalAppBundle:
     app = modal.App(app_name)
     volumes = volumes or {}
@@ -266,23 +353,17 @@ def create_app(
                     gpu,
                     startup_timeout_seconds,
                 )
-                ensure_model_module_loaded()
-                self._logger.info(
-                    "modal.worker.load model_module_loaded elapsed_ms=%.1f",
-                    (perf_counter() - start) * 1000.0,
-                )
-                self._runtime_config = build_model_runtime_config(self._host_config)
-                self._logger.info(
-                    "modal.worker.load runtime_config_ready elapsed_ms=%.1f frame_width=%s frame_height=%s",
-                    (perf_counter() - start) * 1000.0,
-                    getattr(self._runtime_config, "frame_width", None),
-                    getattr(self._runtime_config, "frame_height", None),
-                )
-                self._runtime = LucidRuntime.load_selected(
-                    runtime_config=self._runtime_config,
+                self._model_config = model_config_loader() if model_config_loader is not None else None
+                self._runtime = LucidRuntime.load_model(
+                    runtime_config=self._host_config,
                     logger=self._logger,
-                    model_name=os.getenv("WM_MODEL_NAME", "").strip() or None,
+                    model=model,
+                    config=self._model_config,
                 )
+                if runtime_setup is not None:
+                    result = runtime_setup(self._runtime, self._logger)
+                    if inspect.isawaitable(result):
+                        await result
                 self._logger.info(
                     "modal.worker.load runtime_selected elapsed_ms=%.1f model=%s",
                     (perf_counter() - start) * 1000.0,
@@ -305,7 +386,7 @@ def create_app(
         @modal.method()
         async def run_session(self, payload: dict[str, Any]) -> None:
             request = LaunchRequest.model_validate(payload)
-            session_config = SessionConfig.from_values(
+            session_config = SessionConfig(
                 worker_id=request.worker_id,
                 coordinator_base_url=request.coordinator_base_url,
                 worker_internal_token=request.coordinator_internal_token,
@@ -314,7 +395,9 @@ def create_app(
                 self._host_config,
                 session_config,
                 self._logger,
-                runtime_config=self._runtime_config,
+                model=model,
+                model_config=self._model_config,
+                runtime_config=self._host_config,
                 runtime=self._runtime,
             )
             try:
