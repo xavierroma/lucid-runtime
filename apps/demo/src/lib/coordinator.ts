@@ -4,6 +4,7 @@ export type SessionState =
   | "STARTING"
   | "READY"
   | "RUNNING"
+  | "PAUSED"
   | "CANCELING"
   | "ENDED"
   | "FAILED"

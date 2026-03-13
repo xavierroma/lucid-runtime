@@ -35,6 +35,27 @@ pub async fn mark_running(
     }
 }
 
+pub async fn mark_paused(
+    State(ctx): State<AppContext>,
+    headers: HeaderMap,
+    Path(session_id): Path<Uuid>,
+) -> Response {
+    if !auth::is_bearer_authorized(&headers, &ctx.config.worker_internal_token) {
+        return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    let mut runtime = ctx.runtime.write().await;
+    match runtime.mark_paused(&session_id, Instant::now()) {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(SessionTransitionError::NotFound) => {
+            error_response(StatusCode::NOT_FOUND, "session not found")
+        }
+        Err(SessionTransitionError::InvalidState) => {
+            error_response(StatusCode::CONFLICT, "invalid session transition")
+        }
+    }
+}
+
 pub async fn mark_ready(
     State(ctx): State<AppContext>,
     headers: HeaderMap,

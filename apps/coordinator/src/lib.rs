@@ -69,6 +69,10 @@ pub fn build_router(ctx: AppContext) -> Router {
             axum::routing::post(api_internal::mark_running),
         )
         .route(
+            "/internal/sessions/:session_id/paused",
+            axum::routing::post(api_internal::mark_paused),
+        )
+        .route(
             "/internal/sessions/:session_id/heartbeat",
             axum::routing::post(api_internal::mark_heartbeat),
         )
@@ -681,7 +685,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn internal_callbacks_transition_to_ready_running_and_ended() {
+    async fn internal_callbacks_transition_to_ready_paused_running_and_ended() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
         let (app, config) = test_app(fake_dispatch);
         let (_, created) = create_session(&app, &config, None).await;
@@ -725,6 +729,61 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(running.status(), StatusCode::OK);
+
+        let paused = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/internal/sessions/{}/paused",
+                        created.session.session_id
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", config.worker_internal_token),
+                    )
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(paused.status(), StatusCode::OK);
+
+        let get_paused = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri(format!("/sessions/{}", created.session.session_id))
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        let paused_payload = read_json(get_paused).await;
+        assert_eq!(paused_payload["session"]["state"], "PAUSED");
+
+        let resumed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!(
+                        "/internal/sessions/{}/running",
+                        created.session.session_id
+                    ))
+                    .header(
+                        AUTHORIZATION,
+                        format!("Bearer {}", config.worker_internal_token),
+                    )
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(resumed.status(), StatusCode::OK);
 
         let ended = app
             .clone()
@@ -798,6 +857,19 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(running.status(), StatusCode::UNAUTHORIZED);
+
+        let paused = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/internal/sessions/{session_id}/paused"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(paused.status(), StatusCode::UNAUTHORIZED);
 
         let heartbeat = app
             .clone()

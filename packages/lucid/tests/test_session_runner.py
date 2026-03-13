@@ -61,6 +61,9 @@ class StubLiveKitAdapter:
     async def send_status(self, payload: bytes) -> None:
         self.status_messages.append(payload)
 
+    async def inject_control(self, payload: bytes) -> None:
+        await self._control_messages.put(payload)
+
 
 class _StubSession:
     def __init__(
@@ -81,6 +84,10 @@ class _StubSession:
         self.runtime.observed_prompts.append(self.prompt)
         if self.runtime.block_until_stopped:
             while self.ctx.running:
+                await self.ctx.wait_if_paused()
+                if not self.ctx.running:
+                    break
+                self.runtime.progress_count += 1
                 await asyncio.sleep(0.01)
         self.ctx.running = False
 
@@ -110,6 +117,7 @@ class StubRuntime:
         self.block_until_stopped = block_until_stopped
         self.observed_prompts: list[str] = []
         self.close_calls = 0
+        self.progress_count = 0
         self.sessions: dict[str, _StubSession] = {}
 
     async def load(self) -> None:
@@ -183,6 +191,9 @@ class StubRuntime:
         if session is not None:
             await session.close()
 
+    def allows_input_while_paused(self, name: str) -> bool:
+        return name == "set_prompt"
+
 
 def _runtime_config() -> RuntimeConfig:
     return RuntimeConfig(
@@ -202,9 +213,21 @@ def _session_config() -> SessionConfig:
     )
 
 
-@pytest.mark.asyncio
-async def test_session_runner_runs_session_after_input_grace_and_marks_running(
+async def _wait_for(
+    predicate: Callable[[], bool],
+    *,
+    timeout_s: float = 1.0,
 ) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out waiting for condition")
+
+
+@pytest.mark.asyncio
+async def test_session_runner_waits_for_resume_before_running() -> None:
     calls: list[tuple[str, dict[str, Any] | None]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -232,14 +255,28 @@ async def test_session_runner_runs_session_after_input_grace_and_marks_running(
         runtime=runtime,
     )
 
-    await runner.run_session(
-        Assignment(
-            session_id="session-1",
-            room_name="wm-session-1",
-            worker_access_token="worker-token",
-            control_topic="wm.control",
+    task = asyncio.create_task(
+        runner.run_session(
+            Assignment(
+                session_id="session-1",
+                room_name="wm-session-1",
+                worker_access_token="worker-token",
+                control_topic="wm.control",
+            )
         )
     )
+    await asyncio.sleep(0.05)
+
+    paths = [path for path, _ in calls]
+    assert paths[0] == "/internal/sessions/session-1/ready"
+    assert "/internal/sessions/session-1/running" not in paths
+    assert runtime.observed_prompts == []
+
+    await adapter.inject_control(
+        b'{"type":"resume","seq":1,"ts_ms":10,"session_id":"session-1","payload":{}}'
+    )
+
+    await task
     await runner.close()
 
     paths = [path for path, _ in calls]
@@ -254,7 +291,7 @@ async def test_session_runner_runs_session_after_input_grace_and_marks_running(
 
 
 @pytest.mark.asyncio
-async def test_session_runner_applies_inputs_before_session_starts() -> None:
+async def test_session_runner_applies_inputs_before_resume() -> None:
     calls: list[tuple[str, dict[str, Any] | None]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -275,13 +312,18 @@ async def test_session_runner_applies_inputs_before_session_starts() -> None:
         b'{"type":"action","seq":1,"ts_ms":10,"session_id":"session-3",'
         b'"payload":{"name":"set_prompt","args":{"prompt":"new prompt"}}}'
     )
+    resume_message = (
+        b'{"type":"resume","seq":2,"ts_ms":11,"session_id":"session-3","payload":{}}'
+    )
     runner = SessionRunner(
         _runtime_config(),
         _session_config(),
         logging.getLogger("tests.session_runner"),
         model="yume_modal_example.model:YumeLucidModel",
         coordinator=coordinator,
-        livekit_factory=lambda: StubLiveKitAdapter(control_messages=[prompt_message]),
+        livekit_factory=lambda: StubLiveKitAdapter(
+            control_messages=[prompt_message, resume_message]
+        ),
         runtime=runtime,
     )
 
@@ -301,6 +343,171 @@ async def test_session_runner_applies_inputs_before_session_starts() -> None:
     running_index = paths.index("/internal/sessions/session-3/running")
     assert ready_index < running_index
     assert calls[-1][0] == "/internal/sessions/session-3/ended"
+
+
+@pytest.mark.asyncio
+async def test_session_runner_pauses_and_resumes_without_losing_state() -> None:
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = None
+        if request.content:
+            body = json.loads(request.content.decode("utf-8"))
+        calls.append((request.url.path, body))
+        return httpx.Response(200, json={"status": "ok"})
+
+    transport = httpx.MockTransport(handler)
+    coordinator = CoordinatorClient(
+        base_url="http://coordinator",
+        worker_internal_token="test-token",
+        transport=transport,
+    )
+    runtime = StubRuntime(block_until_stopped=True)
+    adapter = StubLiveKitAdapter()
+    runner = SessionRunner(
+        _runtime_config(),
+        _session_config(),
+        logging.getLogger("tests.session_runner"),
+        model="yume_modal_example.model:YumeLucidModel",
+        coordinator=coordinator,
+        livekit_factory=lambda: adapter,
+        runtime=runtime,
+    )
+
+    task = asyncio.create_task(
+        runner.run_session(
+            Assignment(
+                session_id="session-pause",
+                room_name="wm-session-pause",
+                worker_access_token="worker-token",
+                control_topic="wm.control",
+            )
+        )
+    )
+
+    await adapter.inject_control(
+        b'{"type":"resume","seq":1,"ts_ms":10,"session_id":"session-pause","payload":{}}'
+    )
+    await _wait_for(
+        lambda: [path for path, _ in calls].count("/internal/sessions/session-pause/running")
+        == 1
+    )
+    await _wait_for(lambda: runtime.progress_count > 0)
+
+    await adapter.inject_control(
+        b'{"type":"pause","seq":2,"ts_ms":11,"session_id":"session-pause","payload":{}}'
+    )
+    await _wait_for(
+        lambda: "/internal/sessions/session-pause/paused"
+        in [path for path, _ in calls]
+    )
+    paused_progress = runtime.progress_count
+    await asyncio.sleep(0.05)
+    assert runtime.progress_count == paused_progress
+
+    await adapter.inject_control(
+        b'{"type":"resume","seq":3,"ts_ms":12,"session_id":"session-pause","payload":{}}'
+    )
+    await _wait_for(
+        lambda: [path for path, _ in calls].count("/internal/sessions/session-pause/running")
+        == 2
+    )
+    await _wait_for(lambda: runtime.progress_count > paused_progress)
+
+    runner.stop()
+    await task
+    await runner.close()
+
+    paths = [path for path, _ in calls]
+    assert paths[0] == "/internal/sessions/session-pause/ready"
+    assert paths.count("/internal/sessions/session-pause/running") == 2
+    assert paths.count("/internal/sessions/session-pause/paused") == 1
+    assert paths[-1] == "/internal/sessions/session-pause/ended"
+    assert runtime.observed_prompts == ["default prompt"]
+    assert runtime.close_calls == 1
+    assert next(iter(runtime.sessions.values()), None) is None
+
+
+@pytest.mark.asyncio
+async def test_session_runner_ignores_duplicate_pause_and_resume_messages() -> None:
+    calls: list[tuple[str, dict[str, Any] | None]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = None
+        if request.content:
+            body = json.loads(request.content.decode("utf-8"))
+        calls.append((request.url.path, body))
+        return httpx.Response(200, json={"status": "ok"})
+
+    transport = httpx.MockTransport(handler)
+    coordinator = CoordinatorClient(
+        base_url="http://coordinator",
+        worker_internal_token="test-token",
+        transport=transport,
+    )
+    runtime = StubRuntime(block_until_stopped=True)
+    adapter = StubLiveKitAdapter()
+    runner = SessionRunner(
+        _runtime_config(),
+        _session_config(),
+        logging.getLogger("tests.session_runner"),
+        model="yume_modal_example.model:YumeLucidModel",
+        coordinator=coordinator,
+        livekit_factory=lambda: adapter,
+        runtime=runtime,
+    )
+
+    task = asyncio.create_task(
+        runner.run_session(
+            Assignment(
+                session_id="session-duplicate",
+                room_name="wm-session-duplicate",
+                worker_access_token="worker-token",
+                control_topic="wm.control",
+            )
+        )
+    )
+
+    await adapter.inject_control(
+        b'{"type":"resume","seq":1,"ts_ms":10,"session_id":"session-duplicate","payload":{}}'
+    )
+    await adapter.inject_control(
+        b'{"type":"resume","seq":2,"ts_ms":11,"session_id":"session-duplicate","payload":{}}'
+    )
+    await _wait_for(
+        lambda: [path for path, _ in calls].count("/internal/sessions/session-duplicate/running")
+        == 1
+    )
+
+    await adapter.inject_control(
+        b'{"type":"pause","seq":3,"ts_ms":12,"session_id":"session-duplicate","payload":{}}'
+    )
+    await adapter.inject_control(
+        b'{"type":"pause","seq":4,"ts_ms":13,"session_id":"session-duplicate","payload":{}}'
+    )
+    await _wait_for(
+        lambda: [path for path, _ in calls].count("/internal/sessions/session-duplicate/paused")
+        == 1
+    )
+
+    await adapter.inject_control(
+        b'{"type":"resume","seq":5,"ts_ms":14,"session_id":"session-duplicate","payload":{}}'
+    )
+    await adapter.inject_control(
+        b'{"type":"resume","seq":6,"ts_ms":15,"session_id":"session-duplicate","payload":{}}'
+    )
+    await _wait_for(
+        lambda: [path for path, _ in calls].count("/internal/sessions/session-duplicate/running")
+        == 2
+    )
+
+    runner.stop()
+    await task
+    await runner.close()
+
+    paths = [path for path, _ in calls]
+    assert paths.count("/internal/sessions/session-duplicate/running") == 2
+    assert paths.count("/internal/sessions/session-duplicate/paused") == 1
 
 
 @pytest.mark.asyncio

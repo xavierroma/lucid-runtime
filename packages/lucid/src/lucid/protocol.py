@@ -13,6 +13,8 @@ class ControlMessageType(str, Enum):
     ACTION = "action"
     END = "end"
     PING = "ping"
+    PAUSE = "pause"
+    RESUME = "resume"
 
 
 class StatusMessageType(str, Enum):

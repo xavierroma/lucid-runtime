@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
 from pathlib import Path
@@ -124,6 +125,25 @@ async def test_session_context_validates_video_json_and_bytes_outputs() -> None:
     assert seen[0][0] == "video"
     assert seen[1] == ("state", b'{"ok":true}')
     assert seen[2] == ("blob", b"abc")
+
+
+@pytest.mark.asyncio
+async def test_session_context_waits_until_resumed() -> None:
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=(),
+        publish_fn=_noop_publish,
+        logger=logging.getLogger("tests.lucid_runtime"),
+    )
+    assert ctx.pause() is True
+
+    waiter = asyncio.create_task(ctx.wait_if_paused())
+    await asyncio.sleep(0.01)
+    assert waiter.done() is False
+
+    assert ctx.resume() is True
+    await asyncio.wait_for(waiter, timeout=1.0)
 
 
 def test_generated_artifacts_are_fresh() -> None:

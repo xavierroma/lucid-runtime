@@ -20,6 +20,7 @@ class _StubEngine:
         self.start_prompts: list[str] = []
         self.updated_prompts: list[str] = []
         self.controls: list[WaypointControlState] = []
+        self.generate_calls = 0
         self.end_calls = 0
 
     async def load(self) -> None:
@@ -34,6 +35,7 @@ class _StubEngine:
         self.updated_prompts.append(prompt)
 
     async def generate_frame(self, controls: WaypointControlState) -> tuple[np.ndarray, float]:
+        self.generate_calls += 1
         self.controls.append(controls)
         fill = 200 if self.prompt == "new prompt" else 10
         frame = np.full((360, 640, 3), fill, dtype=np.uint8)
@@ -153,6 +155,47 @@ async def test_session_close_delegates_to_engine() -> None:
     await session.close()
 
     assert engine.end_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_session_pause_stops_new_generation_until_resume() -> None:
+    published: list[np.ndarray] = []
+    first_frame_paused = asyncio.Event()
+    ctx: SessionContext | None = None
+    engine = _StubEngine()
+    model = _build_model(engine)
+
+    async def publish_fn(_name: str, payload: object, _ts_ms: int | None) -> None:
+        assert ctx is not None
+        published.append(np.array(payload, copy=True))
+        if len(published) == 1:
+            ctx.pause()
+            first_frame_paused.set()
+            return
+        if len(published) == 2:
+            ctx.running = False
+
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=model.outputs,
+        publish_fn=publish_fn,
+        logger=logging.getLogger("tests.waypoint_model"),
+    )
+    session = model.create_session(ctx)
+
+    task = asyncio.create_task(session.run())
+    await asyncio.wait_for(first_frame_paused.wait(), timeout=1.0)
+
+    await asyncio.sleep(0.05)
+    assert engine.generate_calls == 1
+
+    ctx.resume()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert [int(frame[0, 0, 0]) for frame in published] == [10, 10]
+    assert engine.start_prompts == ["old prompt"]
+    assert engine.generate_calls == 2
 
 
 @pytest.mark.asyncio

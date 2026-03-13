@@ -34,6 +34,7 @@ interface ConsoleRoomProps {
   token: string | null
   capabilities: Capabilities | null
   promptValue: string | null
+  transportControlSignal: TransportControlSignal | null
   interactionTargetRef: RefObject<HTMLElement | null>
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
@@ -42,7 +43,7 @@ interface ConsoleRoomProps {
   onRoomError: (message: string | null) => void
 }
 
-interface InputEnvelope {
+interface ActionEnvelope {
   type: "action"
   seq: number
   ts_ms: number
@@ -51,6 +52,21 @@ interface InputEnvelope {
     name: string
     args: Record<string, unknown>
   }
+}
+
+export type TransportControlSignalType = "pause" | "resume"
+
+export interface TransportControlSignal {
+  id: number
+  type: TransportControlSignalType
+}
+
+interface ControlEnvelope {
+  type: TransportControlSignalType
+  seq: number
+  ts_ms: number
+  session_id: string | null
+  payload: Record<string, never>
 }
 
 interface PointerAccumulator {
@@ -66,7 +82,7 @@ function encodeInputMessage(args: {
   seq: number
   sessionId: string
 }) {
-  const envelope: InputEnvelope = {
+  const envelope: ActionEnvelope = {
     type: "action",
     seq: args.seq,
     ts_ms: Date.now(),
@@ -75,6 +91,21 @@ function encodeInputMessage(args: {
       name: args.name,
       args: args.args,
     },
+  }
+  return encoder.encode(JSON.stringify(envelope))
+}
+
+function encodeControlMessage(args: {
+  type: TransportControlSignalType
+  seq: number
+  sessionId: string
+}) {
+  const envelope: ControlEnvelope = {
+    type: args.type,
+    seq: args.seq,
+    ts_ms: Date.now(),
+    session_id: args.sessionId,
+    payload: {},
   }
   return encoder.encode(JSON.stringify(envelope))
 }
@@ -133,6 +164,7 @@ export function ConsoleRoom({
   token,
   capabilities,
   promptValue,
+  transportControlSignal,
   interactionTargetRef,
   fallback,
   onConnectionChange,
@@ -176,6 +208,7 @@ export function ConsoleRoom({
         session={session}
         capabilities={capabilities}
         promptValue={promptValue}
+        transportControlSignal={transportControlSignal}
         interactionTargetRef={interactionTargetRef}
         fallback={fallback}
         onConnectionChange={onConnectionChange}
@@ -190,6 +223,7 @@ interface ConsoleRoomContentProps {
   session: SessionRecord
   capabilities: Capabilities
   promptValue: string | null
+  transportControlSignal: TransportControlSignal | null
   interactionTargetRef: RefObject<HTMLElement | null>
   fallback: ReactNode
   onConnectionChange: (connected: boolean) => void
@@ -201,6 +235,7 @@ function ConsoleRoomContent({
   session,
   capabilities,
   promptValue,
+  transportControlSignal,
   interactionTargetRef,
   fallback,
   onConnectionChange,
@@ -213,6 +248,8 @@ function ConsoleRoomContent({
   const { send } = useDataChannel(capabilities.control_topic)
   const actionSeqRef = useRef(0)
   const lastPromptRef = useRef<string | null>(null)
+  const resumeRequestedRef = useRef(false)
+  const lastTransportControlSignalIdRef = useRef<number | null>(null)
   const pressedKeysRef = useRef(new Set<string>())
   const pressedMouseButtonsRef = useRef(new Set<number>())
   const holdStateRef = useRef(new Map<string, boolean>())
@@ -270,8 +307,12 @@ function ConsoleRoomContent({
       ),
     [capabilities.manifest.inputs],
   )
-  const sessionAcceptsControlMessages =
-    session.state === "READY" || session.state === "RUNNING"
+  const sessionCanResume = session.state === "READY"
+  const sessionAcceptsLivePromptUpdates =
+    session.state === "RUNNING" || session.state === "PAUSED"
+  const sessionAcceptsPersistentInteractionMessages =
+    session.state === "RUNNING" || session.state === "PAUSED"
+  const sessionAcceptsTransientInteractionMessages = session.state === "RUNNING"
 
   const remoteTrack = useMemo(() => {
     const preferredTrack = cameraTracks.find(
@@ -310,6 +351,17 @@ function ConsoleRoomContent({
     )
   }
 
+  const sendControl = async (type: TransportControlSignalType) => {
+    await send(
+      encodeControlMessage({
+        type,
+        seq: nextSequence(),
+        sessionId: session.session_id,
+      }),
+      { reliable: true },
+    )
+  }
+
   useEffect(() => {
     onConnectionChange(connectionState === ConnectionState.Connected)
   }, [connectionState, onConnectionChange])
@@ -321,6 +373,8 @@ function ConsoleRoomContent({
   useEffect(() => {
     actionSeqRef.current = 0
     lastPromptRef.current = null
+    resumeRequestedRef.current = false
+    lastTransportControlSignalIdRef.current = null
     pressedKeysRef.current.clear()
     pressedMouseButtonsRef.current.clear()
     holdStateRef.current.clear()
@@ -339,13 +393,117 @@ function ConsoleRoomContent({
 
   useEffect(() => {
     const normalizedPrompt = promptValue?.trim() ?? ""
+    if (connectionState !== ConnectionState.Connected) {
+      return
+    }
+    if (!sessionCanResume || resumeRequestedRef.current) {
+      return
+    }
+
+    let cancelled = false
+
+    const publishStartupSequence = async () => {
+      try {
+        onActionError(null)
+        if (
+          promptInput &&
+          normalizedPrompt &&
+          lastPromptRef.current !== normalizedPrompt
+        ) {
+          await sendInput(promptInput.name, { prompt: normalizedPrompt }, true)
+          if (cancelled) {
+            return
+          }
+          lastPromptRef.current = normalizedPrompt
+        }
+        await sendControl("resume")
+        if (!cancelled) {
+          resumeRequestedRef.current = true
+        }
+      } catch (error) {
+        if (!cancelled) {
+          onActionError(
+            error instanceof Error
+              ? error.message
+              : "failed to publish startup controls",
+          )
+        }
+      }
+    }
+
+    void publishStartupSequence()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionState,
+    onActionError,
+    promptInput,
+    promptValue,
+    sessionCanResume,
+    session.session_id,
+  ])
+
+  useEffect(() => {
+    if (!transportControlSignal) {
+      return
+    }
+    if (lastTransportControlSignalIdRef.current === transportControlSignal.id) {
+      return
+    }
+    if (connectionState !== ConnectionState.Connected) {
+      return
+    }
+    if (transportControlSignal.type === "pause" && session.state !== "RUNNING") {
+      return
+    }
+    if (transportControlSignal.type === "resume" && session.state !== "PAUSED") {
+      return
+    }
+
+    let cancelled = false
+
+    const publishTransportControl = async () => {
+      try {
+        onActionError(null)
+        await sendControl(transportControlSignal.type)
+        if (!cancelled) {
+          lastTransportControlSignalIdRef.current = transportControlSignal.id
+        }
+      } catch (error) {
+        if (!cancelled) {
+          onActionError(
+            error instanceof Error
+              ? error.message
+              : `failed to publish ${transportControlSignal.type}`,
+          )
+        }
+      }
+    }
+
+    void publishTransportControl()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionState,
+    onActionError,
+    session.state,
+    transportControlSignal,
+    session.session_id,
+  ])
+
+  useEffect(() => {
+    const normalizedPrompt = promptValue?.trim() ?? ""
     if (!promptInput || !normalizedPrompt) {
       return
     }
     if (connectionState !== ConnectionState.Connected) {
       return
     }
-    if (!sessionAcceptsControlMessages) {
+    if (!sessionAcceptsLivePromptUpdates) {
       return
     }
     if (lastPromptRef.current === normalizedPrompt) {
@@ -380,28 +538,41 @@ function ConsoleRoomContent({
     onActionError,
     promptInput,
     promptValue,
-    sessionAcceptsControlMessages,
     session.session_id,
+    sessionAcceptsLivePromptUpdates,
   ])
 
   useEffect(() => {
     if (connectionState !== ConnectionState.Connected) {
       return
     }
-    if (!sessionAcceptsControlMessages) {
+    if (
+      !sessionAcceptsPersistentInteractionMessages &&
+      !sessionAcceptsTransientInteractionMessages
+    ) {
       return
     }
 
     const target = interactionTargetRef.current
-    const hasMouseBindings =
+    const hasPersistentMouseBindings = holdInputs.some(
+      (input) => input.binding.mouse_buttons.length > 0,
+    )
+    const hasTransientMouseBindings =
       pointerInputs.length > 0 ||
       wheelInputs.length > 0 ||
-      holdInputs.some((input) => input.binding.mouse_buttons.length > 0) ||
       pressInputs.some((input) => input.binding.mouse_buttons.length > 0)
-    const hasKeyboardBindings =
+    const hasMouseBindings =
+      (sessionAcceptsPersistentInteractionMessages && hasPersistentMouseBindings) ||
+      (sessionAcceptsTransientInteractionMessages && hasTransientMouseBindings)
+    const hasPersistentKeyboardBindings =
       holdInputs.some((input) => input.binding.keys.length > 0) ||
-      pressInputs.some((input) => input.binding.keys.length > 0) ||
       axisInputs.length > 0
+    const hasTransientKeyboardBindings = pressInputs.some(
+      (input) => input.binding.keys.length > 0,
+    )
+    const hasKeyboardBindings =
+      (sessionAcceptsPersistentInteractionMessages && hasPersistentKeyboardBindings) ||
+      (sessionAcceptsTransientInteractionMessages && hasTransientKeyboardBindings)
 
     const flushPointerInputs = () => {
       pointerFrameRef.current = null
@@ -518,37 +689,41 @@ function ConsoleRoomContent({
       let consumed = false
       pressedKeysRef.current.add(event.code)
 
-      for (const input of holdInputs) {
-        if (input.binding.keys.includes(event.code)) {
-          consumed = true
-          publishHoldState(input)
-        }
-      }
-
-      for (const input of pressInputs) {
-        if (!input.binding.keys.includes(event.code)) {
-          continue
-        }
-        consumed = true
-        void (async () => {
-          try {
-            onActionError(null)
-            await sendInput(input.name, {}, true)
-          } catch (error) {
-            onActionError(
-              error instanceof Error ? error.message : "failed to publish press input",
-            )
+      if (sessionAcceptsPersistentInteractionMessages) {
+        for (const input of holdInputs) {
+          if (input.binding.keys.includes(event.code)) {
+            consumed = true
+            publishHoldState(input)
           }
-        })()
+        }
+
+        for (const input of axisInputs) {
+          if (
+            input.binding.positive_keys.includes(event.code) ||
+            input.binding.negative_keys.includes(event.code)
+          ) {
+            consumed = true
+            publishAxisState(input)
+          }
+        }
       }
 
-      for (const input of axisInputs) {
-        if (
-          input.binding.positive_keys.includes(event.code) ||
-          input.binding.negative_keys.includes(event.code)
-        ) {
+      if (sessionAcceptsTransientInteractionMessages) {
+        for (const input of pressInputs) {
+          if (!input.binding.keys.includes(event.code)) {
+            continue
+          }
           consumed = true
-          publishAxisState(input)
+          void (async () => {
+            try {
+              onActionError(null)
+              await sendInput(input.name, {}, true)
+            } catch (error) {
+              onActionError(
+                error instanceof Error ? error.message : "failed to publish press input",
+              )
+            }
+          })()
         }
       }
 
@@ -566,20 +741,22 @@ function ConsoleRoomContent({
       }
 
       let consumed = false
-      for (const input of holdInputs) {
-        if (input.binding.keys.includes(event.code)) {
-          consumed = true
-          publishHoldState(input)
+      if (sessionAcceptsPersistentInteractionMessages) {
+        for (const input of holdInputs) {
+          if (input.binding.keys.includes(event.code)) {
+            consumed = true
+            publishHoldState(input)
+          }
         }
-      }
 
-      for (const input of axisInputs) {
-        if (
-          input.binding.positive_keys.includes(event.code) ||
-          input.binding.negative_keys.includes(event.code)
-        ) {
-          consumed = true
-          publishAxisState(input)
+        for (const input of axisInputs) {
+          if (
+            input.binding.positive_keys.includes(event.code) ||
+            input.binding.negative_keys.includes(event.code)
+          ) {
+            consumed = true
+            publishAxisState(input)
+          }
         }
       }
 
@@ -598,34 +775,38 @@ function ConsoleRoomContent({
         pressedMouseButtonsRef.current.add(event.button)
       }
 
-      for (const input of holdInputs) {
-        if (input.binding.mouse_buttons.includes(event.button)) {
-          consumed = true
-          publishHoldState(input)
-        }
-      }
-
-      for (const input of pressInputs) {
-        if (!input.binding.mouse_buttons.includes(event.button)) {
-          continue
-        }
-        consumed = true
-        void (async () => {
-          try {
-            onActionError(null)
-            await sendInput(input.name, {}, true)
-          } catch (error) {
-            onActionError(
-              error instanceof Error ? error.message : "failed to publish press input",
-            )
+      if (sessionAcceptsPersistentInteractionMessages) {
+        for (const input of holdInputs) {
+          if (input.binding.mouse_buttons.includes(event.button)) {
+            consumed = true
+            publishHoldState(input)
           }
-        })()
+        }
       }
 
-      const pointerLockInput = pointerInputs.find((input) => input.binding.pointer_lock)
-      if (pointerLockInput && document.pointerLockElement !== target) {
-        consumed = true
-        void target.requestPointerLock()
+      if (sessionAcceptsTransientInteractionMessages) {
+        for (const input of pressInputs) {
+          if (!input.binding.mouse_buttons.includes(event.button)) {
+            continue
+          }
+          consumed = true
+          void (async () => {
+            try {
+              onActionError(null)
+              await sendInput(input.name, {}, true)
+            } catch (error) {
+              onActionError(
+                error instanceof Error ? error.message : "failed to publish press input",
+              )
+            }
+          })()
+        }
+
+        const pointerLockInput = pointerInputs.find((input) => input.binding.pointer_lock)
+        if (pointerLockInput && document.pointerLockElement !== target) {
+          consumed = true
+          void target.requestPointerLock()
+        }
       }
 
       if (consumed) {
@@ -640,15 +821,21 @@ function ConsoleRoomContent({
       if (!pressedMouseButtonsRef.current.delete(event.button)) {
         return
       }
-      for (const input of holdInputs) {
-        if (input.binding.mouse_buttons.includes(event.button)) {
-          publishHoldState(input)
+      if (sessionAcceptsPersistentInteractionMessages) {
+        for (const input of holdInputs) {
+          if (input.binding.mouse_buttons.includes(event.button)) {
+            publishHoldState(input)
+          }
         }
       }
     }
 
     const handleMouseMove = (event: MouseEvent) => {
-      if (!pointerInputs.length || !target) {
+      if (
+        !sessionAcceptsTransientInteractionMessages ||
+        !pointerInputs.length ||
+        !target
+      ) {
         return
       }
       for (const input of pointerInputs) {
@@ -666,7 +853,12 @@ function ConsoleRoomContent({
     }
 
     const handleWheel = (event: WheelEvent) => {
-      if (!wheelInputs.length || !target || !target.contains(event.target as Node | null)) {
+      if (
+        !sessionAcceptsTransientInteractionMessages ||
+        !wheelInputs.length ||
+        !target ||
+        !target.contains(event.target as Node | null)
+      ) {
         return
       }
       if (event.deltaY === 0) {
@@ -736,7 +928,8 @@ function ConsoleRoomContent({
     pressInputs,
     send,
     session.session_id,
-    sessionAcceptsControlMessages,
+    sessionAcceptsPersistentInteractionMessages,
+    sessionAcceptsTransientInteractionMessages,
     wheelInputs,
   ])
 

@@ -30,6 +30,7 @@ export type WaypointHoldControl =
 interface WaypointControlsProps {
   value: WaypointControlState
   disabled: boolean
+  transientDisabled?: boolean
   onHoldChange: (control: WaypointHoldControl, pressed: boolean) => void
   onLookChange: (mouseX: number, mouseY: number) => void
   onLookReset: () => void
@@ -87,6 +88,7 @@ function HoldButton({
 export function WaypointControls({
   value,
   disabled,
+  transientDisabled = false,
   onHoldChange,
   onLookChange,
   onLookReset,
@@ -111,7 +113,7 @@ export function WaypointControls({
           <button
             type="button"
             className="scroll-chip"
-            disabled={disabled}
+            disabled={disabled || transientDisabled}
             onClick={() => onScrollNudge(-1)}
           >
             -
@@ -123,7 +125,7 @@ export function WaypointControls({
           <button
             type="button"
             className="scroll-chip"
-            disabled={disabled}
+            disabled={disabled || transientDisabled}
             onClick={() => onScrollNudge(1)}
           >
             +
@@ -178,14 +180,14 @@ export function WaypointControls({
           aria-label="Look pad"
           onContextMenu={(event) => event.preventDefault()}
           onWheel={(event) => {
-            if (disabled || event.deltaY === 0) {
+            if (disabled || transientDisabled || event.deltaY === 0) {
               return
             }
             event.preventDefault()
             onScrollNudge(event.deltaY < 0 ? 1 : -1)
           }}
           onPointerDown={(event) => {
-            if (disabled || !lookPadRef.current) {
+            if (disabled || transientDisabled || !lookPadRef.current) {
               return
             }
             event.preventDefault()
@@ -196,7 +198,12 @@ export function WaypointControls({
             }
           }}
           onPointerMove={(event) => {
-            if (disabled || !lookPadRef.current || event.buttons === 0) {
+            if (
+              disabled ||
+              transientDisabled ||
+              !lookPadRef.current ||
+              event.buttons === 0
+            ) {
               return
             }
             const lastPointer = lastPointerRef.current

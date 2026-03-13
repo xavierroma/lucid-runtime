@@ -35,39 +35,73 @@ class YumeSession(LucidSession["YumeLucidModel"]):
         frame_interval_s = 1.0 / max(int(self.model.config.target_fps), 1)
         await engine.start_session(self.prompt)
         last_prompt = self.prompt
+        pending_chunk = None
+        pending_chunk_frame_index = 0
+        pending_chunk_locked_by_pause = False
+        pending_chunk_published_frames = 0
         while self.ctx.running:
-            last_prompt, _ = await _sync_prompt(engine, self, last_prompt)
-            chunk = await engine.generate_chunk()
-            last_prompt, prompt_changed = await _sync_prompt(engine, self, last_prompt)
-            if prompt_changed:
-                logger = self.model.logger
-                if logger is not None:
-                    logger.info(
-                        "dropping stale yume chunk after prompt update chunk_frames=%s",
-                        len(chunk.frames),
-                    )
-                await asyncio.sleep(0)
-                continue
-            self.ctx.record_inference_ms(chunk.inference_ms)
-            enqueued_frames = 0
-            prompt_changed_during_publish = False
-            for idx, frame in enumerate(chunk.frames):
+            await self.ctx.wait_if_paused()
+            if not self.ctx.running:
+                break
+            if pending_chunk is None:
+                last_prompt, _ = await _sync_prompt(engine, self, last_prompt)
+                pending_chunk = await engine.generate_chunk()
+                pending_chunk_frame_index = 0
+                pending_chunk_published_frames = 0
+                pending_chunk_locked_by_pause = self.ctx.is_paused()
+                await self.ctx.wait_if_paused()
                 if not self.ctx.running:
                     break
-                last_prompt, prompt_changed = await _sync_prompt(engine, self, last_prompt)
-                if prompt_changed:
-                    prompt_changed_during_publish = True
+                if not pending_chunk_locked_by_pause:
+                    last_prompt, prompt_changed = await _sync_prompt(engine, self, last_prompt)
+                    if prompt_changed:
+                        logger = self.model.logger
+                        if logger is not None:
+                            logger.info(
+                                "dropping stale yume chunk after prompt update chunk_frames=%s",
+                                len(pending_chunk.frames),
+                            )
+                        pending_chunk = None
+                        await asyncio.sleep(0)
+                        continue
+                self.ctx.record_inference_ms(pending_chunk.inference_ms)
+            prompt_changed_during_publish = False
+            while pending_chunk is not None and pending_chunk_frame_index < len(pending_chunk.frames):
+                if not self.ctx.running:
                     break
+                await self.ctx.wait_if_paused()
+                if not self.ctx.running:
+                    break
+                if not pending_chunk_locked_by_pause:
+                    last_prompt, prompt_changed = await _sync_prompt(engine, self, last_prompt)
+                    if prompt_changed:
+                        prompt_changed_during_publish = True
+                        break
+                frame = pending_chunk.frames[pending_chunk_frame_index]
                 await self.ctx.publish("main_video", frame)
-                enqueued_frames += 1
-                if idx + 1 < len(chunk.frames):
+                pending_chunk_published_frames += 1
+                pending_chunk_frame_index += 1
+                if pending_chunk_frame_index < len(pending_chunk.frames):
                     await asyncio.sleep(frame_interval_s)
+                if self.ctx.is_paused():
+                    pending_chunk_locked_by_pause = True
             if prompt_changed_during_publish and self.model.logger is not None:
                 self.model.logger.info(
                     "stopped yume chunk publish after prompt update published_frames=%s chunk_frames=%s",
-                    enqueued_frames,
-                    len(chunk.frames),
+                    pending_chunk_published_frames,
+                    len(pending_chunk.frames) if pending_chunk is not None else 0,
                 )
+                pending_chunk = None
+                pending_chunk_frame_index = 0
+                pending_chunk_published_frames = 0
+                pending_chunk_locked_by_pause = False
+                await asyncio.sleep(0)
+                continue
+            if pending_chunk is None:
+                continue
+            if pending_chunk_frame_index < len(pending_chunk.frames):
+                await asyncio.sleep(0)
+                continue
             if self.model.logger is not None:
                 output_metrics = self.ctx.output_metrics()
                 self.model.logger.info(
@@ -75,12 +109,17 @@ class YumeSession(LucidSession["YumeLucidModel"]):
                         "generated yume chunk chunk_ms=%.2f chunk_frames=%s "
                         "effective_gen_fps=%.2f queue_depth=%s dropped_frames=%s"
                     ),
-                    chunk.chunk_ms,
-                    enqueued_frames,
-                    (enqueued_frames * 1000.0) / max(chunk.chunk_ms, 1e-6),
+                    pending_chunk.chunk_ms,
+                    pending_chunk_published_frames,
+                    (pending_chunk_published_frames * 1000.0)
+                    / max(pending_chunk.chunk_ms, 1e-6),
                     int(output_metrics.get("queue_depth", 0)),
                     int(output_metrics.get("dropped_frames", 0)),
                 )
+            pending_chunk = None
+            pending_chunk_frame_index = 0
+            pending_chunk_published_frames = 0
+            pending_chunk_locked_by_pause = False
             await asyncio.sleep(0)
 
     async def close(self) -> None:

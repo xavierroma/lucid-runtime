@@ -11,6 +11,7 @@ pub enum SessionState {
     Starting,
     Ready,
     Running,
+    Paused,
     Canceling,
     Ended,
     Failed,

@@ -72,7 +72,7 @@ YUME_CHUNK_FRAMES=8
 YUME_BASE_PROMPT=POV of a character walking in a minecraft scene
 ```
 
-The first session after a fresh deploy is a cold start. In the current setup, loading the full Yume stack onto an `A100` takes about 3 minutes before the session transitions from `STARTING` to `RUNNING`. Subsequent sessions reuse the warm container and start much faster.
+The first session after a fresh deploy is a cold start. In the current setup, loading the full Yume stack onto an `A100` takes about 3 minutes before the session transitions from `STARTING` to `READY`. After that, the demo sends the selected prompt plus `resume`, and the worker enters `RUNNING`. Subsequent sessions reuse the warm container and start much faster.
 
 ## Run through the demo
 
@@ -83,4 +83,4 @@ cargo run -p coordinator
 cd apps/demo && bun run dev
 ```
 
-The demo calls `POST /sessions`, receives the prompt-only Yume manifest, joins the returned LiveKit room, and renders the `main_video` output plus the generated prompt form. For a freshly deployed worker, expect the first demo session to sit in `STARTING` until the model finishes loading.
+The demo calls `POST /sessions`, receives the prompt-only Yume manifest, joins the returned LiveKit room, and renders the `main_video` output plus the generated prompt form. For a freshly deployed worker, expect the first demo session to sit in `STARTING` until the model finishes loading, then briefly in `READY` while the client sends the prompt and `resume`.

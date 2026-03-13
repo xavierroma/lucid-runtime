@@ -222,7 +222,8 @@ textarea {
   height: 0.9rem;
 }
 
-.start-button {
+.start-button,
+.transport-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -243,14 +244,30 @@ textarea {
     filter 120ms ease;
 }
 
-.start-button:hover:not(:disabled) {
+.start-button:hover:not(:disabled),
+.transport-button:hover:not(:disabled) {
   transform: translateY(-1px);
   filter: brightness(1.05);
 }
 
-.start-button:disabled {
+.start-button:disabled,
+.transport-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.transport-button {
+  color: white;
+  background: linear-gradient(180deg, #5e6774, #303640);
+}
+
+.transport-button-resume {
+  background: linear-gradient(180deg, var(--console-teal), var(--console-teal-dark));
+}
+
+.transport-icon {
+  width: 0.9rem;
+  height: 0.9rem;
 }
 
 .route-button,
@@ -827,7 +844,8 @@ textarea {
   }
 
   .route-button,
-  .start-button {
+  .start-button,
+  .transport-button {
     flex: 1 1 12rem;
   }
 

@@ -223,7 +223,7 @@ impl RuntimeState {
         };
 
         match record.session.state {
-            SessionState::Ready => {
+            SessionState::Ready | SessionState::Paused => {
                 record.session.state = SessionState::Running;
             }
             SessionState::Canceling => return Ok(()),
@@ -233,6 +233,27 @@ impl RuntimeState {
         if record.running_at.is_none() {
             record.running_at = Some(now);
         }
+        record.last_heartbeat_at = Some(now);
+        Ok(())
+    }
+
+    pub fn mark_paused(
+        &mut self,
+        session_id: &Uuid,
+        now: Instant,
+    ) -> Result<(), SessionTransitionError> {
+        let Some(record) = self.sessions.get_mut(session_id) else {
+            return Err(SessionTransitionError::NotFound);
+        };
+
+        match record.session.state {
+            SessionState::Running => {
+                record.session.state = SessionState::Paused;
+            }
+            SessionState::Canceling => return Ok(()),
+            _ => return Err(SessionTransitionError::InvalidState),
+        }
+
         record.last_heartbeat_at = Some(now);
         Ok(())
     }
@@ -405,7 +426,7 @@ impl RuntimeState {
 
         if matches!(
             record.session.state,
-            SessionState::Ready | SessionState::Running
+            SessionState::Ready | SessionState::Running | SessionState::Paused
         ) && record
             .ready_at
             .filter(|ready| now.duration_since(*ready) > max_duration)
@@ -423,7 +444,7 @@ impl RuntimeState {
 
         if matches!(
             record.session.state,
-            SessionState::Ready | SessionState::Running
+            SessionState::Ready | SessionState::Running | SessionState::Paused
         ) && record
             .last_heartbeat_at
             .filter(|heartbeat| now.duration_since(*heartbeat) > worker_heartbeat_timeout)
@@ -727,5 +748,126 @@ mod tests {
             .get_session(&session_id)
             .expect("session should still exist");
         assert_eq!(session.state, SessionState::Running);
+    }
+
+    #[test]
+    fn running_session_can_pause_and_resume() {
+        let mut state = RuntimeState::new();
+        let session_id = Uuid::new_v4();
+        state.create_session(session_id, "call-1".to_string(), Instant::now());
+
+        assert_eq!(state.mark_ready(&session_id, Instant::now()), Ok(()));
+        assert_eq!(state.mark_running(&session_id, Instant::now()), Ok(()));
+        assert_eq!(state.mark_paused(&session_id, Instant::now()), Ok(()));
+        assert_eq!(state.mark_running(&session_id, Instant::now()), Ok(()));
+
+        let session = state
+            .get_session(&session_id)
+            .expect("session should still exist");
+        assert_eq!(session.state, SessionState::Running);
+    }
+
+    #[test]
+    fn pause_requires_running_state() {
+        let mut state = RuntimeState::new();
+        let session_id = Uuid::new_v4();
+        state.create_session(session_id, "call-1".to_string(), Instant::now());
+
+        assert_eq!(
+            state.mark_paused(&session_id, Instant::now()),
+            Err(SessionTransitionError::InvalidState)
+        );
+        assert_eq!(state.mark_ready(&session_id, Instant::now()), Ok(()));
+        assert_eq!(
+            state.mark_paused(&session_id, Instant::now()),
+            Err(SessionTransitionError::InvalidState)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn paused_session_times_out_after_max_duration() {
+        let mut state = RuntimeState::new();
+        let session_id = Uuid::new_v4();
+        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state
+            .mark_ready(&session_id, Instant::now())
+            .expect("ready transition should succeed");
+        state
+            .mark_running(&session_id, Instant::now())
+            .expect("running transition should succeed");
+        state
+            .mark_paused(&session_id, Instant::now())
+            .expect("paused transition should succeed");
+
+        advance(Duration::from_secs(3601)).await;
+        let commands = state.reconcile_session(
+            &session_id,
+            "call-1",
+            Some(ModalExecutionStatus::Pending),
+            Instant::now(),
+            Duration::from_secs(120),
+            Duration::from_secs(3600),
+            Duration::from_secs(30),
+            Duration::from_secs(15),
+        );
+
+        assert_eq!(
+            commands,
+            vec![ReconcileCommand::CancelModal {
+                session_id,
+                function_call_id: "call-1".to_string(),
+                force: false,
+            }]
+        );
+        let session = state
+            .get_session(&session_id)
+            .expect("session should still exist");
+        assert_eq!(session.state, SessionState::Canceling);
+        assert_eq!(session.end_reason, Some(SessionEndReason::SessionTimeout));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn paused_session_times_out_when_heartbeat_stops() {
+        let mut state = RuntimeState::new();
+        let session_id = Uuid::new_v4();
+        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state
+            .mark_ready(&session_id, Instant::now())
+            .expect("ready transition should succeed");
+        state
+            .mark_running(&session_id, Instant::now())
+            .expect("running transition should succeed");
+        state
+            .mark_paused(&session_id, Instant::now())
+            .expect("paused transition should succeed");
+
+        advance(Duration::from_secs(16)).await;
+        let commands = state.reconcile_session(
+            &session_id,
+            "call-1",
+            Some(ModalExecutionStatus::Pending),
+            Instant::now(),
+            Duration::from_secs(120),
+            Duration::from_secs(3600),
+            Duration::from_secs(30),
+            Duration::from_secs(15),
+        );
+
+        assert_eq!(
+            commands,
+            vec![ReconcileCommand::CancelModal {
+                session_id,
+                function_call_id: "call-1".to_string(),
+                force: false,
+            }]
+        );
+        let session = state
+            .get_session(&session_id)
+            .expect("session should still exist");
+        assert_eq!(session.state, SessionState::Canceling);
+        assert_eq!(
+            session.end_reason,
+            Some(SessionEndReason::WorkerHeartbeatTimeout)
+        );
     }
 }
