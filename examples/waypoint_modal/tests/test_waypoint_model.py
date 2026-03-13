@@ -46,7 +46,7 @@ class _StubEngine:
         self.end_calls += 1
 
 
-def _runtime_config(*, warmup_on_load: bool = False) -> WaypointRuntimeConfig:
+def _runtime_config() -> WaypointRuntimeConfig:
     return WaypointRuntimeConfig(
         frame_width=640,
         frame_height=360,
@@ -57,7 +57,6 @@ def _runtime_config(*, warmup_on_load: bool = False) -> WaypointRuntimeConfig:
         waypoint_prompt_encoder_source="/models/google-umt5-xl",
         waypoint_default_prompt="old prompt",
         waypoint_seed_image=None,
-        waypoint_warmup_on_load=warmup_on_load,
     )
 
 
@@ -234,17 +233,19 @@ async def test_model_load_commits_compiler_cache_after_warmup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commit_calls: list[str] = []
+    warmup_flags: list[bool] = []
 
     class _StubLoadEngine:
         def __init__(self, runtime_config, logger) -> None:
             self.runtime_config = runtime_config
             self.logger = logger
 
-        async def load(self) -> None:
+        async def load(self, *, warmup: bool = True) -> None:
+            warmup_flags.append(warmup)
             return None
     monkeypatch.setattr("waypoint_modal_example.model.WaypointEngine", _StubLoadEngine)
 
-    model = WaypointLucidModel(_runtime_config(warmup_on_load=True))
+    model = WaypointLucidModel(_runtime_config())
     model.bind_runtime(None, logging.getLogger("tests.waypoint_model"))
     model.compiler_cache_commit_hook = lambda _logger, reason: commit_calls.append(reason) or True
 
@@ -255,39 +256,13 @@ async def test_model_load_commits_compiler_cache_after_warmup(
         )
     )
 
+    assert warmup_flags == [True]
     assert commit_calls == ["post_warmup"]
 
 
 @pytest.mark.asyncio
-async def test_engine_load_skips_warmup_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = WaypointEngine(_runtime_config(warmup_on_load=False), logging.getLogger("tests.waypoint"))
-
-    async def immediate(fn):
-        return fn()
-
-    monkeypatch.setattr(engine, "_run_on_cuda_thread", immediate)
-    monkeypatch.setattr(engine, "_load_engine_sync", lambda: setattr(engine, "_engine", object()))
-    monkeypatch.setattr(
-        engine,
-        "_load_seed_frame",
-        lambda: np.zeros((4, 4, 3), dtype=np.uint8),
-    )
-
-    warmup_calls: list[str] = []
-
-    async def warmup() -> None:
-        warmup_calls.append("warmup")
-
-    monkeypatch.setattr(engine, "_warmup", warmup)
-
-    await engine.load()
-
-    assert warmup_calls == []
-
-
-@pytest.mark.asyncio
-async def test_engine_load_runs_warmup_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    engine = WaypointEngine(_runtime_config(warmup_on_load=True), logging.getLogger("tests.waypoint"))
+async def test_engine_load_runs_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = WaypointEngine(_runtime_config(), logging.getLogger("tests.waypoint"))
 
     async def immediate(fn):
         return fn()
@@ -310,6 +285,43 @@ async def test_engine_load_runs_warmup_when_enabled(monkeypatch: pytest.MonkeyPa
     await engine.load()
 
     assert warmup_calls == ["warmup"]
+
+
+@pytest.mark.asyncio
+async def test_model_load_skips_warmup_when_compiler_cache_marker_matches(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    commit_calls: list[str] = []
+    warmup_flags: list[bool] = []
+
+    class _StubLoadEngine:
+        def __init__(self, runtime_config, logger) -> None:
+            self.runtime_config = runtime_config
+            self.logger = logger
+
+        async def load(self, *, warmup: bool = True) -> None:
+            warmup_flags.append(warmup)
+
+    monkeypatch.setattr("waypoint_modal_example.model.WaypointEngine", _StubLoadEngine)
+    monkeypatch.setenv("MODAL_COMPILER_CACHE_ROOT", str(tmp_path))
+    monkeypatch.setenv("MODAL_GPU", "RTX-PRO-6000")
+    monkeypatch.setenv("WORLD_ENGINE_COMMIT", "a30a00c302380c0f657347e8456bb6837ff37c22")
+
+    model = WaypointLucidModel(_runtime_config())
+    model.bind_runtime(None, logging.getLogger("tests.waypoint_model"))
+    model.compiler_cache_commit_hook = lambda _logger, reason: commit_calls.append(reason) or True
+    model._write_compiled_cache_marker()
+
+    await model.load(
+        LoadContext(
+            config=model.config,
+            logger=logging.getLogger("tests.waypoint_model"),
+        )
+    )
+
+    assert warmup_flags == [False]
+    assert commit_calls == []
 
 
 def test_engine_rolls_session_before_exceeding_frame_history(monkeypatch: pytest.MonkeyPatch) -> None:

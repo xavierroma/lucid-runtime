@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from time import perf_counter
 from typing import Annotated
 
@@ -284,9 +288,14 @@ class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
             raise RuntimeError("logger must be bound before loading the model")
         engine_config = self.config
         start = perf_counter()
+        warmup_required = not self._has_compiled_cache()
+        if warmup_required:
+            self.logger.info("waypoint.model.load compiler_cache_miss warmup_required=true")
+        else:
+            self.logger.info("waypoint.model.load compiler_cache_hit warmup_required=false")
         self._engine = WaypointEngine(engine_config, self.logger)
         try:
-            await self._engine.load()
+            await self._engine.load(warmup=warmup_required)
         except Exception as exc:
             self.logger.error(
                 "waypoint.model.load failed duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s error_type=%s",
@@ -297,12 +306,14 @@ class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
                 exc.__class__.__name__,
             )
             raise
-        if engine_config.waypoint_warmup_on_load and self.compiler_cache_commit_hook is not None:
-            self._compiler_cache_committed = await asyncio.to_thread(
-                self.compiler_cache_commit_hook,
-                self.logger,
-                "post_warmup",
-            )
+        if warmup_required:
+            self._write_compiled_cache_marker()
+            if self.compiler_cache_commit_hook is not None:
+                self._compiler_cache_committed = await asyncio.to_thread(
+                    self.compiler_cache_commit_hook,
+                    self.logger,
+                    "post_warmup",
+                )
         self.logger.info(
             "waypoint.model.load complete duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s",
             (perf_counter() - start) * 1000.0,
@@ -318,3 +329,61 @@ class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
         if self._engine is None:
             raise RuntimeError("model must be loaded before starting a session")
         return self._engine
+
+    def _has_compiled_cache(self) -> bool:
+        marker_path = self._compiled_cache_marker_path()
+        if marker_path is None or not marker_path.exists():
+            return False
+        try:
+            payload = json.loads(marker_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return payload == self._compiled_cache_metadata()
+
+    def _write_compiled_cache_marker(self) -> None:
+        marker_path = self._compiled_cache_marker_path()
+        if marker_path is None:
+            return
+        try:
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.write_text(
+                json.dumps(self._compiled_cache_metadata(), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger = self.logger
+            if logger is not None:
+                logger.warning(
+                    "waypoint.model.load compiler_cache_marker_write_failed path=%s error_type=%s",
+                    marker_path,
+                    exc.__class__.__name__,
+                )
+
+    def _compiled_cache_marker_path(self) -> Path | None:
+        cache_root = os.getenv("MODAL_COMPILER_CACHE_ROOT", "").strip()
+        if not cache_root:
+            return None
+        return Path(cache_root) / ".waypoint_compile_cache.json"
+
+    def _compiled_cache_metadata(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "torch_version": _torch_version(),
+            "gpu_type": os.getenv("MODAL_GPU", "").strip() or None,
+            "world_engine_commit": os.getenv("WORLD_ENGINE_COMMIT", "").strip() or None,
+            "model_source": self.config.waypoint_model_source,
+            "ae_source": self.config.waypoint_ae_source,
+            "prompt_encoder_source": self.config.waypoint_prompt_encoder_source,
+            "frame_width": int(self.config.frame_width),
+            "frame_height": int(self.config.frame_height),
+            "target_fps": int(self.config.target_fps),
+        }
+
+
+def _torch_version() -> str | None:
+    try:
+        import torch
+    except Exception:
+        return None
+    return str(torch.__version__)

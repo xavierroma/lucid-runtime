@@ -22,7 +22,6 @@ class WaypointRuntimeConfig(BaseModel):
         min_length=1,
     )
     waypoint_seed_image: Path | None = None
-    waypoint_warmup_on_load: bool = False
 
     @classmethod
     def from_env(cls) -> "WaypointRuntimeConfig":
@@ -46,6 +45,4 @@ class WaypointRuntimeConfig(BaseModel):
                 "An explorable world with coherent geometry, stable lighting, and smooth forward motion.",
             ),
             waypoint_seed_image=Path(raw_seed_image) if raw_seed_image else None,
-            waypoint_warmup_on_load=os.getenv("WAYPOINT_WARMUP_ON_LOAD", "0").strip().lower()
-            in {"1", "true", "yes", "on"},
         )
