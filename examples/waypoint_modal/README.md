@@ -72,12 +72,11 @@ WM_ENGINE=waypoint
 WAYPOINT_MODEL_SOURCE=/models/Waypoint-1.1-Small
 WAYPOINT_AE_SOURCE=/models/owl_vae_f16_c16_distill_v0_nogan
 WAYPOINT_PROMPT_ENCODER_SOURCE=/models/google-umt5-xl
-WAYPOINT_WARMUP_ON_LOAD=0
 ```
 
 The Waypoint model card recommends an RTX 5090 for roughly `20-30 FPS` or an RTX 6000 Pro Blackwell for roughly `35 FPS` when running locally. This example defaults to `MODAL_GPU=RTX-PRO-6000` and keeps compiler caches under a GPU-specific directory so RTX PRO 6000 containers reuse their own `torch.compile` artifacts instead of mixing them with another accelerator type. If you want a cheaper starting point, try `L40S` first and only move up if startup time or frame rate is not acceptable.
 
-`world_engine` compiles and autotunes kernels on the first generated frame. In this example, `WAYPOINT_WARMUP_ON_LOAD=0` skips that first-frame warmup during Modal container startup so the worker can come up inside Modal's startup deadline. The tradeoff is that the first generated frame of a fresh container still pays the compile/autotune cost. The compiled Triton, Inductor, and CUDA driver caches are written under `MODAL_COMPILER_CACHE_ROOT` on the mounted cache volume, and the example commits that volume after the first successful frame so later containers can reuse the compile.
+`world_engine` compiles and autotunes kernels during load before the worker becomes interactive. After a successful warmup, the example writes a cache marker under `MODAL_COMPILER_CACHE_ROOT` and commits the mounted cache volume immediately, so later containers can skip warmup when that marker matches the current runtime signature (GPU type, torch version, world-engine revision, model sources, and frame size). If the marker is missing or stale, the worker warms again and refreshes the cached compile. The first successful interactive frame still keeps the existing commit fallback, and session teardown commits again so cache updates are not lost.
 
 For debugging a `device-side assert`, set `CUDA_LAUNCH_BLOCKING=1` in the env file, redeploy, and rerun the session. That forces CUDA failures to surface at the kernel that triggered them instead of later during teardown.
 

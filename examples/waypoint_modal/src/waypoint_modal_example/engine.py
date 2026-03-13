@@ -33,19 +33,19 @@ class WaypointEngine:
         self._last_frame: np.ndarray | None = None
         self._current_prompt = runtime_config.waypoint_default_prompt
 
-    async def load(self) -> None:
+    async def load(self, *, warmup: bool = True) -> None:
         if self._engine is not None:
             return
         start = perf_counter()
         try:
             await self._run_on_cuda_thread(self._load_engine_sync)
             self._logger.info(
-                "waypoint.engine.load engine_ready elapsed_ms=%.1f model_source=%s frame_width=%s frame_height=%s warmup_on_load=%s",
+                "waypoint.engine.load engine_ready elapsed_ms=%.1f model_source=%s frame_width=%s frame_height=%s warmup=%s",
                 (perf_counter() - start) * 1000.0,
                 self._config.waypoint_model_source,
                 self._config.frame_width,
                 self._config.frame_height,
-                self._config.waypoint_warmup_on_load,
+                warmup,
             )
             self._seed_frame = self._load_seed_frame()
             self._logger.info(
@@ -53,7 +53,7 @@ class WaypointEngine:
                 (perf_counter() - start) * 1000.0,
                 self._config.waypoint_model_source,
             )
-            if self._config.waypoint_warmup_on_load:
+            if warmup:
                 await self._warmup()
                 self._logger.info(
                     "waypoint.engine.load warmup_complete elapsed_ms=%.1f model_source=%s",
@@ -62,10 +62,7 @@ class WaypointEngine:
                 )
             else:
                 self._logger.info(
-                    "skipping waypoint warmup during load; first generated frame will pay compile/autotune cost"
-                )
-                self._logger.info(
-                    "waypoint.engine.load warmup_skipped elapsed_ms=%.1f model_source=%s",
+                    "waypoint.engine.load warmup_skipped elapsed_ms=%.1f model_source=%s reason=compiler_cache_hit",
                     (perf_counter() - start) * 1000.0,
                     self._config.waypoint_model_source,
                 )
