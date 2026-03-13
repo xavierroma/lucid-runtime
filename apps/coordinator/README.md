@@ -50,7 +50,7 @@ Required environment variables:
 
 Optional environment variables:
 
-- `WM_MODEL_NAME` (default: `yume`; should match the deployed Modal worker model)
+- `WM_MODEL_NAME` (default: `yume`; `yume`, `waypoint`, or `helios`; should match the deployed Modal worker model)
 - `COORDINATOR_BIND_ADDR` (default: `0.0.0.0:8080`)
 - `WORKER_ID` (default: `wm-worker-1`)
 - `SESSION_STARTUP_TIMEOUT_SECS` (default: `120`)
@@ -61,7 +61,7 @@ Optional environment variables:
 `POST /sessions` also accepts an optional JSON body:
 
 ```json
-{ "model_name": "waypoint" }
+{ "model_name": "helios" }
 ```
 
 If `model_name` is provided, it must match `WM_MODEL_NAME`. The coordinator is still a

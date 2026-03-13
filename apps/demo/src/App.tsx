@@ -31,7 +31,7 @@ import {
   type SavedEnvironment,
 } from "@/lib/environments"
 
-type DemoModelName = "yume" | "waypoint"
+type DemoModelName = "yume" | "waypoint" | "helios"
 type DisplayTone = "off" | "warm" | "live" | "fault"
 type AppRoute = "/" | "/environments"
 
@@ -58,6 +58,11 @@ const MODEL_OPTIONS: Array<{
       label: "Waypoint",
       fullLabel: "Waypoint-1.1-Small",
     },
+    {
+      name: "helios",
+      label: "Helios",
+      fullLabel: "Helios-Distilled",
+    },
   ]
 
 function hasPromptInput(capabilities: Capabilities | null) {
@@ -67,7 +72,7 @@ function hasPromptInput(capabilities: Capabilities | null) {
 }
 
 function normalizeModelName(value: string | null | undefined): DemoModelName | null {
-  if (value === "yume" || value === "waypoint") {
+  if (value === "yume" || value === "waypoint" || value === "helios") {
     return value
   }
   return null
