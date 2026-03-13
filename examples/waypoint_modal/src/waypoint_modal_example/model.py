@@ -221,8 +221,8 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
                         )
 
                 elapsed_s = asyncio.get_running_loop().time() - loop_start_s
-                if elapsed_s < target_interval_s:
-                    await asyncio.sleep(target_interval_s - elapsed_s)
+                # if elapsed_s < target_interval_s:
+                #     await asyncio.sleep(target_interval_s - elapsed_s)
         except Exception as exc:
             self.ctx.logger.error(
                 "waypoint.session.run failed duration_ms=%.1f session_id=%s frames_generated=%s inference_ms_p50=%.1f error_type=%s",

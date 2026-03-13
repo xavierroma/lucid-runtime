@@ -156,8 +156,10 @@ def test_generated_artifacts_are_fresh() -> None:
     manifest = load_manifest("yume_modal_example.model:YumeLucidModel")
     manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.json"
     waypoint_manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.waypoint.json"
+    helios_manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.helios.json"
     ts_path = Path(__file__).resolve().parents[3] / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.ts"
     waypoint_ts_path = Path(__file__).resolve().parents[3] / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.waypoint.ts"
+    helios_ts_path = Path(__file__).resolve().parents[3] / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.helios.ts"
 
     assert manifest_path.read_text(encoding="utf-8") == (
         module.json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -173,11 +175,28 @@ def test_generated_artifacts_are_fresh() -> None:
         )
         + "\n"
     )
+    assert helios_manifest_path.read_text(encoding="utf-8") == (
+        module.json.dumps(
+            module._load_manifest(
+                module_name="helios_modal_example.model",
+                extra_path=Path(__file__).resolve().parents[3] / "examples" / "helios_modal" / "src",
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
     assert ts_path.read_text(encoding="utf-8") == module.render_ts(manifest)
     assert waypoint_ts_path.read_text(encoding="utf-8") == module.render_ts(
         module._load_manifest(
             module_name="waypoint_modal_example.model",
             extra_path=Path(__file__).resolve().parents[3] / "examples" / "waypoint_modal" / "src",
+        )
+    )
+    assert helios_ts_path.read_text(encoding="utf-8") == module.render_ts(
+        module._load_manifest(
+            module_name="helios_modal_example.model",
+            extra_path=Path(__file__).resolve().parents[3] / "examples" / "helios_modal" / "src",
         )
     )
 

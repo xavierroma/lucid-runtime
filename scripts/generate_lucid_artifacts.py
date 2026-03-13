@@ -12,13 +12,20 @@ ROOT = Path(__file__).resolve().parent.parent
 LUCID_SRC = ROOT / "packages" / "lucid" / "src"
 YUME_MODAL_EXAMPLE_SRC = ROOT / "examples" / "yume_modal" / "src"
 WAYPOINT_MODAL_EXAMPLE_SRC = ROOT / "examples" / "waypoint_modal" / "src"
+HELIOS_MODAL_EXAMPLE_SRC = ROOT / "examples" / "helios_modal" / "src"
 MANIFEST_PATH = ROOT / "packages" / "contracts" / "generated" / "lucid_manifest.json"
 WAYPOINT_MANIFEST_PATH = (
     ROOT / "packages" / "contracts" / "generated" / "lucid_manifest.waypoint.json"
 )
+HELIOS_MANIFEST_PATH = (
+    ROOT / "packages" / "contracts" / "generated" / "lucid_manifest.helios.json"
+)
 TS_PATH = ROOT / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.ts"
 WAYPOINT_TS_PATH = (
     ROOT / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.waypoint.ts"
+)
+HELIOS_TS_PATH = (
+    ROOT / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.helios.ts"
 )
 
 
@@ -32,6 +39,10 @@ def main() -> int:
         module_name="waypoint_modal_example.model",
         extra_path=WAYPOINT_MODAL_EXAMPLE_SRC,
     )
+    helios_manifest = _load_manifest(
+        module_name="helios_modal_example.model",
+        extra_path=HELIOS_MODAL_EXAMPLE_SRC,
+    )
     MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.write_text(
         json.dumps(yume_manifest, indent=2, sort_keys=True) + "\n",
@@ -41,9 +52,14 @@ def main() -> int:
         json.dumps(waypoint_manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    HELIOS_MANIFEST_PATH.write_text(
+        json.dumps(helios_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     TS_PATH.parent.mkdir(parents=True, exist_ok=True)
     TS_PATH.write_text(render_ts(yume_manifest), encoding="utf-8")
     WAYPOINT_TS_PATH.write_text(render_ts(waypoint_manifest), encoding="utf-8")
+    HELIOS_TS_PATH.write_text(render_ts(helios_manifest), encoding="utf-8")
     return 0
 
 
