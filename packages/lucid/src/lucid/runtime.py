@@ -480,6 +480,8 @@ class SessionContext:
         return snapshot
 
     async def publish(self, output_name: str, sample: Any, ts_ms: int | None = None) -> None:
+        # Video samples are passed through by reference. Callers must keep the buffer
+        # immutable until this coroutine returns.
         spec = self._require_output(output_name)
         normalized = _validate_output_sample(spec, sample)
         await self._publish_fn(output_name, normalized, ts_ms)
@@ -571,9 +573,11 @@ def _validate_output_sample(spec: OutputSpec, sample: Any) -> Any:
             raise OutputValidationError(
                 f"{spec.name} expects frame shape {expected_shape}, got {sample.shape}"
             )
+        if not sample.flags.c_contiguous:
+            raise OutputValidationError(f"{spec.name} expects C-contiguous video frames")
         if spec.config.get("pixel_format") != "rgb24":
             raise OutputValidationError("only rgb24 video outputs are supported")
-        return np.ascontiguousarray(sample)
+        return sample
 
     if spec.kind == "audio":
         if not isinstance(sample, np.ndarray):

@@ -142,7 +142,6 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
 
     async def run(self) -> None:
         engine = self.model.require_engine()
-        target_interval_s = 1.0 / max(int(self.model.config.target_fps), 1)
         start = perf_counter()
         try:
             await engine.start_session(self.prompt)
@@ -170,7 +169,6 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
                 await self.ctx.wait_if_paused()
                 if not self.ctx.running:
                     break
-                loop_start_s = asyncio.get_running_loop().time()
                 prompt = self.prompt.strip() or self.model.config.waypoint_default_prompt
                 if prompt != last_prompt:
                     await engine.update_prompt(prompt)
@@ -219,10 +217,6 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
                             self.ctx.logger,
                             "first_frame",
                         )
-
-                elapsed_s = asyncio.get_running_loop().time() - loop_start_s
-                # if elapsed_s < target_interval_s:
-                #     await asyncio.sleep(target_interval_s - elapsed_s)
         except Exception as exc:
             self.ctx.logger.error(
                 "waypoint.session.run failed duration_ms=%.1f session_id=%s frames_generated=%s inference_ms_p50=%.1f error_type=%s",

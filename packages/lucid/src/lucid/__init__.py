@@ -18,7 +18,6 @@ from .host import SessionRunner
 from .livekit import (
     ControlOutcome,
     FakeLiveKitAdapter,
-    FramePipeline,
     LiveKitAdapter,
     LiveKitUnavailableError,
     OutputRouter,
@@ -76,7 +75,6 @@ __all__ = [
     "DEFAULT_STATUS_TOPIC",
     "FakeLiveKitAdapter",
     "FrameMetrics",
-    "FramePipeline",
     "HoldBinding",
     "InputBinding",
     "LiveKitAdapter",

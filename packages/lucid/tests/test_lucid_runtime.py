@@ -118,13 +118,47 @@ async def test_session_context_validates_video_json_and_bytes_outputs() -> None:
         logger=logging.getLogger("tests.lucid_runtime"),
     )
 
-    await ctx.publish("video", np.zeros((4, 4, 3), dtype=np.uint8))
+    frame = np.zeros((4, 4, 3), dtype=np.uint8)
+    await ctx.publish("video", frame)
     await ctx.publish("state", {"ok": True})
     await ctx.publish("blob", b"abc")
 
     assert seen[0][0] == "video"
+    assert seen[0][1] is frame
     assert seen[1] == ("state", b'{"ok":true}')
     assert seen[2] == ("blob", b"abc")
+
+
+@pytest.mark.asyncio
+async def test_session_context_rejects_non_contiguous_video_frames() -> None:
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=(publish.video(name="video", width=4, height=4, fps=8),),
+        publish_fn=_noop_publish,
+        logger=logging.getLogger("tests.lucid_runtime"),
+    )
+    frame = np.zeros((4, 4, 3), dtype=np.uint8).transpose(1, 0, 2)
+
+    with pytest.raises(Exception, match="C-contiguous"):
+        await ctx.publish("video", frame)
+
+
+@pytest.mark.asyncio
+async def test_session_context_rejects_invalid_video_dtype_and_shape() -> None:
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=(publish.video(name="video", width=4, height=4, fps=8),),
+        publish_fn=_noop_publish,
+        logger=logging.getLogger("tests.lucid_runtime"),
+    )
+
+    with pytest.raises(Exception, match="uint8"):
+        await ctx.publish("video", np.zeros((4, 4, 3), dtype=np.float32))
+
+    with pytest.raises(Exception, match="expects frame shape"):
+        await ctx.publish("video", np.zeros((4, 5, 3), dtype=np.uint8))
 
 
 @pytest.mark.asyncio
