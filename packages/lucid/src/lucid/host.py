@@ -210,7 +210,6 @@ class SessionRunner:
                     self._model_loop(session_ctx=session_ctx),
                     name="model_loop",
                 ),
-                *output_router.start(self._session_stop_event),
                 asyncio.create_task(
                     self._metrics_loop(
                         output_router=output_router,

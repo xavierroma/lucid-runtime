@@ -257,6 +257,8 @@ class WaypointEngine:
         frame = engine.gen_frame(ctrl=ctrl)
         if frame.dtype != torch.uint8:
             frame = frame.clamp(0, 255).to(dtype=torch.uint8)
+        if not frame.is_contiguous():
+            frame = frame.contiguous()
 
         expected_shape = (
             int(self._config.frame_height),
@@ -267,7 +269,8 @@ class WaypointEngine:
             raise RuntimeError(
                 f"waypoint frame shape mismatch: expected {expected_shape}, got {tuple(frame.shape)}"
             )
-        frame_np = np.ascontiguousarray(frame.cpu().numpy())
+        frame_cpu = frame if frame.device.type == "cpu" else frame.to(device="cpu")
+        frame_np = frame_cpu.numpy()
         self._last_frame = frame_np
         return frame_np
 

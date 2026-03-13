@@ -6,10 +6,8 @@ import hashlib
 import hmac
 import json
 import logging
-import statistics
 import time
-from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 
 import numpy as np
@@ -248,26 +246,29 @@ class RealLiveKitAdapter:
         video_source = self._video_sources.get(output_name)
         if video_source is None:
             raise LiveKitUnavailableError(f"video output is not initialized: {output_name}")
-        rgb_frame = np.ascontiguousarray(frame, dtype=np.uint8)
+        if frame.dtype != np.uint8:
+            raise ValueError("publish_video expects uint8 frames")
+        if not frame.flags.c_contiguous:
+            raise ValueError("publish_video expects C-contiguous frames")
         try:
             from livekit import rtc  # type: ignore
         except Exception as exc:  # pragma: no cover - depends on runtime package
             raise LiveKitUnavailableError("livekit package is missing") from exc
         video_frame = rtc.VideoFrame(
-            width=rgb_frame.shape[1],
-            height=rgb_frame.shape[0],
+            width=frame.shape[1],
+            height=frame.shape[0],
             type=rtc.VideoBufferType.RGB24,
-            data=memoryview(rgb_frame).cast("B"),
+            data=memoryview(frame).cast("B"),
         )
         video_source.capture_frame(video_frame)
         self._published_frames += 1
         if self._published_frames == 1:
             self._logger.info(
                 "published first livekit frame size=%sx%s mean=%.2f std=%.2f",
-                rgb_frame.shape[1],
-                rgb_frame.shape[0],
-                float(rgb_frame.mean()),
-                float(rgb_frame.std()),
+                frame.shape[1],
+                frame.shape[0],
+                float(frame.mean()),
+                float(frame.std()),
             )
 
     async def publish_audio(self, output_name: str, samples: np.ndarray) -> None:
@@ -332,95 +333,46 @@ class RealLiveKitAdapter:
             reliable=True,
         )
 
-
-@dataclass(slots=True)
-class _FrameItem:
-    frame: np.ndarray
-
-
-class FramePipeline:
-    def __init__(self, max_frames: int) -> None:
-        self._queue: asyncio.Queue[_FrameItem] = asyncio.Queue(maxsize=max_frames)
-        self._dropped_frames = 0
-        self._inference_ms: deque[float] = deque(maxlen=128)
-        self._published_frames = 0
-        self._first_publish_ts: float | None = None
-
-    async def push(self, frame: np.ndarray, *, inference_ms: float) -> None:
-        if self._queue.full():
-            try:
-                self._queue.get_nowait()
-                self._dropped_frames += 1
-            except asyncio.QueueEmpty:
-                pass
-        await self._queue.put(_FrameItem(frame=frame))
-        self._inference_ms.append(inference_ms)
-
-    @property
-    def dropped_frames(self) -> int:
-        return self._dropped_frames
-
-    async def pop(self, timeout_s: float) -> np.ndarray | None:
-        timeout_s = max(timeout_s, 0.0)
-        if timeout_s == 0:
-            try:
-                return self._queue.get_nowait().frame
-            except asyncio.QueueEmpty:
-                return None
-
-        try:
-            return (await asyncio.wait_for(self._queue.get(), timeout=timeout_s)).frame
-        except TimeoutError:
-            return None
-
-    async def publish_loop(
-        self,
-        publish_fn: Callable[[np.ndarray], Awaitable[None]],
-        stop_event: asyncio.Event,
-        target_fps: int,
-    ) -> None:
-        frame_period_s = 1.0 / max(target_fps, 1)
-        last_publish_started: float | None = None
-        while not stop_event.is_set():
-            next_frame = await self.pop(timeout_s=0.1)
-            if next_frame is None:
-                continue
-            if last_publish_started is not None:
-                sleep_for = frame_period_s - (time.monotonic() - last_publish_started)
-                if sleep_for > 0:
-                    try:
-                        await asyncio.wait_for(stop_event.wait(), timeout=sleep_for)
-                        break
-                    except TimeoutError:
-                        pass
-            publish_started = time.monotonic()
-            await publish_fn(next_frame)
-            if self._first_publish_ts is None:
-                self._first_publish_ts = publish_started
-            self._published_frames += 1
-            last_publish_started = publish_started
-
-    def metrics(self) -> FrameMetrics:
-        if self._first_publish_ts is None:
-            effective_fps = 0.0
-        else:
-            elapsed = max(time.monotonic() - self._first_publish_ts, 1e-6)
-            effective_fps = self._published_frames / elapsed
-        inference_ms_p50 = (
-            statistics.median(self._inference_ms) if self._inference_ms else 0.0
-        )
-        return FrameMetrics(
-            effective_fps=effective_fps,
-            queue_depth=self._queue.qsize(),
-            inference_ms_p50=inference_ms_p50,
-            publish_dropped_frames=self._dropped_frames,
-        )
-
-
 @dataclass(slots=True)
 class _VideoOutputState:
     spec: OutputSpec
-    pipeline: FramePipeline
+    publish_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    published_frames: int = 0
+    first_publish_ts: float | None = None
+    last_publish_started: float | None = None
+
+    async def publish(
+        self,
+        frame: np.ndarray,
+        *,
+        publish_fn: Callable[[np.ndarray], Awaitable[None]],
+        target_fps: int,
+    ) -> None:
+        frame_period_s = 1.0 / max(target_fps, 1)
+        async with self.publish_lock:
+            if self.last_publish_started is not None:
+                sleep_for = frame_period_s - (time.monotonic() - self.last_publish_started)
+                if sleep_for > 0:
+                    await asyncio.sleep(sleep_for)
+            publish_started = time.monotonic()
+            await publish_fn(frame)
+            if self.first_publish_ts is None:
+                self.first_publish_ts = publish_started
+            self.published_frames += 1
+            self.last_publish_started = publish_started
+
+    def metrics(self) -> FrameMetrics:
+        if self.first_publish_ts is None:
+            effective_fps = 0.0
+        else:
+            elapsed = max(time.monotonic() - self.first_publish_ts, 1e-6)
+            effective_fps = self.published_frames / elapsed
+        return FrameMetrics(
+            effective_fps=effective_fps,
+            queue_depth=0,
+            inference_ms_p50=0.0,
+            publish_dropped_frames=0,
+        )
 
 
 class OutputRouter:
@@ -444,14 +396,23 @@ class OutputRouter:
                 continue
             self._video_outputs[output.name] = _VideoOutputState(
                 spec=output,
-                pipeline=FramePipeline(max_queue_frames),
             )
+        # Retained temporarily for config compatibility; video publishing no longer buffers.
+        _ = max_queue_frames
+        _ = frame_width
+        _ = frame_height
 
     async def publish(self, output_name: str, payload: Any, ts_ms: int | None = None) -> None:
         _ = ts_ms
         spec = self._outputs[output_name]
         if spec.kind == "video":
-            await self._video_outputs[output_name].pipeline.push(payload, inference_ms=0.0)
+            state = self._video_outputs[output_name]
+            fps = min(self._target_fps, int(state.spec.config.get("fps", self._target_fps)))
+            await state.publish(
+                payload,
+                publish_fn=lambda frame, name=output_name: self._livekit.publish_video(name, frame),
+                target_fps=fps,
+            )
             return
         if spec.kind == "audio":
             await self._livekit.publish_audio(output_name, payload)
@@ -459,19 +420,9 @@ class OutputRouter:
         await self._livekit.publish_data(output_name, payload, reliable=True)
 
     def start(self, stop_event: asyncio.Event) -> list[asyncio.Task[None]]:
-        tasks: list[asyncio.Task[None]] = []
-        for output_name, state in self._video_outputs.items():
-            fps = min(self._target_fps, int(state.spec.config.get("fps", self._target_fps)))
-            task = asyncio.create_task(
-                state.pipeline.publish_loop(
-                    lambda frame, name=output_name: self._livekit.publish_video(name, frame),
-                    stop_event,
-                    fps,
-                ),
-                name=f"publish_loop:{output_name}",
-            )
-            tasks.append(task)
-        return tasks
+        # Video publishing is now synchronous from OutputRouter.publish().
+        _ = stop_event
+        return []
 
     def snapshot(self) -> dict[str, float | int]:
         if not self._video_outputs:
@@ -481,17 +432,13 @@ class OutputRouter:
                 "dropped_frames": 0,
             }
         effective_fps = 0.0
-        queue_depth = 0
-        dropped_frames = 0
         for state in self._video_outputs.values():
-            metrics = state.pipeline.metrics()
+            metrics = state.metrics()
             effective_fps += metrics.effective_fps
-            queue_depth += metrics.queue_depth
-            dropped_frames += metrics.publish_dropped_frames
         return {
             "effective_fps": effective_fps,
-            "queue_depth": queue_depth,
-            "dropped_frames": dropped_frames,
+            "queue_depth": 0,
+            "dropped_frames": 0,
         }
 
     def metrics(self, *, inference_ms_p50: float) -> FrameMetrics:
@@ -503,18 +450,14 @@ class OutputRouter:
                 publish_dropped_frames=0,
             )
         effective_fps = 0.0
-        queue_depth = 0
-        dropped_frames = 0
         for state in self._video_outputs.values():
-            metrics = state.pipeline.metrics()
+            metrics = state.metrics()
             effective_fps += metrics.effective_fps
-            queue_depth += metrics.queue_depth
-            dropped_frames += metrics.publish_dropped_frames
         return FrameMetrics(
             effective_fps=effective_fps,
-            queue_depth=queue_depth,
+            queue_depth=0,
             inference_ms_p50=inference_ms_p50,
-            publish_dropped_frames=dropped_frames,
+            publish_dropped_frames=0,
         )
 
 

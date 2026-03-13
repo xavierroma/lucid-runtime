@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import types
 
 import numpy as np
@@ -332,6 +333,56 @@ def test_engine_rolls_session_before_exceeding_frame_history(monkeypatch: pytest
     engine._roll_session_if_needed_sync()
 
     assert rollover_calls == [("roll prompt", 9)]
+
+
+def test_generate_frame_sync_reuses_single_cpu_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeDevice:
+        type = "cpu"
+
+    class _FakeTensor:
+        def __init__(self, array: np.ndarray, *, contiguous: bool = True) -> None:
+            self._array = array
+            self.dtype = "uint8"
+            self.device = _FakeDevice()
+            self._contiguous = contiguous
+
+        @property
+        def shape(self) -> tuple[int, ...]:
+            return self._array.shape
+
+        def is_contiguous(self) -> bool:
+            return self._contiguous
+
+        def contiguous(self) -> "_FakeTensor":
+            return _FakeTensor(np.ascontiguousarray(self._array), contiguous=True)
+
+        def clamp(self, _min: int, _max: int) -> "_FakeTensor":
+            return self
+
+        def to(self, *, dtype=None, device=None) -> "_FakeTensor":
+            _ = device
+            if dtype is not None and dtype != "uint8":
+                raise AssertionError(f"unexpected dtype conversion: {dtype}")
+            return self
+
+        def numpy(self) -> np.ndarray:
+            return self._array
+
+    fake_torch = types.SimpleNamespace(uint8="uint8")
+    engine = WaypointEngine(_runtime_config(), logging.getLogger("tests.waypoint"))
+    frame = _FakeTensor(np.zeros((360, 640, 3), dtype=np.uint8), contiguous=False)
+    engine._engine = types.SimpleNamespace(gen_frame=lambda ctrl: frame)
+    engine._ctrl_cls = lambda **kwargs: kwargs
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(engine, "_roll_session_if_needed_sync", lambda: None)
+
+    generated = engine._generate_frame_sync(WaypointControlState())
+
+    assert generated.flags.c_contiguous
+    assert engine._last_frame is generated
 
 
 async def _noop_publish(_name: str, _payload: object, _ts_ms: int | None) -> None:
