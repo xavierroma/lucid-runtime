@@ -46,6 +46,10 @@ class CoordinatorClient:
         response = await self._client.post(f"/internal/sessions/{session_id}/running")
         self._raise_for_error(response)
 
+    async def mark_paused(self, session_id: str) -> None:
+        response = await self._client.post(f"/internal/sessions/{session_id}/paused")
+        self._raise_for_error(response)
+
     async def mark_heartbeat(self, session_id: str) -> None:
         response = await self._client.post(f"/internal/sessions/{session_id}/heartbeat")
         self._raise_for_error(response)

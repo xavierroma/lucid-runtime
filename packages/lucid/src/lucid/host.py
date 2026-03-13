@@ -5,6 +5,7 @@ import inspect
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from time import perf_counter
 from typing import Any
 
@@ -29,9 +30,15 @@ class SessionLifecycleHooks:
     on_running: Callable[[str], Any] | None = None
 
 
+class _RunPhase(str, Enum):
+    READY = "ready"
+    READY_RESUME_REQUESTED = "ready_resume_requested"
+    RUNNING = "running"
+    PAUSED = "paused"
+
+
 class SessionRunner:
     HEARTBEAT_INTERVAL_SECS = 2.0
-    INITIAL_INPUT_GRACE_SECS = 0.5
 
     def __init__(
         self,
@@ -69,6 +76,8 @@ class SessionRunner:
         self._livekit_factory = livekit_factory
         self._lifecycle_hooks = lifecycle_hooks or SessionLifecycleHooks()
         self._session_stop_event = asyncio.Event()
+        self._resume_event = asyncio.Event()
+        self._run_phase = _RunPhase.READY
         self._active_session_ctx = None
         self._loaded = False
 
@@ -110,6 +119,7 @@ class SessionRunner:
     def stop(self) -> None:
         if self._active_session_ctx is not None:
             self._active_session_ctx.running = False
+            self._active_session_ctx.resume()
         self._session_stop_event.set()
 
     async def run_session(self, assignment: Assignment) -> SessionResult:
@@ -117,6 +127,8 @@ class SessionRunner:
             await self.load()
 
         self._session_stop_event = asyncio.Event()
+        self._resume_event = asyncio.Event()
+        self._run_phase = _RunPhase.READY
         livekit = self._build_livekit_adapter()
         output_router = OutputRouter(
             outputs=self._runtime.outputs,
@@ -247,6 +259,7 @@ class SessionRunner:
             self._logger.exception("session failed: %s", exc)
         finally:
             session_ctx.running = False
+            session_ctx.resume()
             self._active_session_ctx = None
             await self._runtime.close_session(session_ctx)
             self._logger.info(
@@ -327,6 +340,7 @@ class SessionRunner:
                 self._consume_task_result(task, result)
         finally:
             session_ctx.running = False
+            session_ctx.resume()
             self._session_stop_event.set()
             stop_task.cancel()
             for task in tasks:
@@ -358,23 +372,30 @@ class SessionRunner:
             if outcome.stop_requested:
                 result.ended_by_control = True
                 session_ctx.running = False
+                session_ctx.resume()
                 self._session_stop_event.set()
+                continue
+            if outcome.pause_requested:
+                await self._pause_session(session_id=session_id, session_ctx=session_ctx)
+                continue
+            if outcome.resume_requested:
+                await self._resume_session(session_id=session_id, session_ctx=session_ctx)
                 continue
             if outcome.pong_payload is not None:
                 await status.pong(outcome.pong_payload)
 
     async def _model_loop(self, *, session_ctx) -> None:
-        initial_inputs_received = await self._wait_for_initial_input_barrier(session_ctx)
+        resumed = await self._wait_for_resume_signal()
         if not session_ctx.running or self._session_stop_event.is_set():
             return
-        if self._requires_initial_input_barrier():
+        if resumed:
             self._logger.info(
-                "session_runner._model_loop initial_input_barrier elapsed outcome=%s session_id=%s",
-                "input_received" if initial_inputs_received else "timeout",
+                "session_runner._model_loop resume_received session_id=%s",
                 session_ctx.session_id,
             )
         if self._coordinator is not None:
             await self._coordinator.mark_running(session_ctx.session_id)
+        self._run_phase = _RunPhase.RUNNING
         await self._emit_lifecycle_hook(
             self._lifecycle_hooks.on_running,
             session_ctx.session_id,
@@ -382,17 +403,14 @@ class SessionRunner:
         await self._runtime.run_session(session_ctx)
         self._session_stop_event.set()
 
-    async def _wait_for_initial_input_barrier(self, session_ctx) -> bool:
-        if not self._requires_initial_input_barrier():
-            return False
-
+    async def _wait_for_resume_signal(self) -> bool:
         wait_task = asyncio.create_task(
-            session_ctx.wait_for_initial_input(self.INITIAL_INPUT_GRACE_SECS),
-            name="initial_input_barrier",
+            self._resume_event.wait(),
+            name="resume_signal",
         )
         stop_task = asyncio.create_task(
             self._session_stop_event.wait(),
-            name="initial_input_barrier_stop",
+            name="resume_signal_stop",
         )
         try:
             done, _ = await asyncio.wait(
@@ -407,8 +425,27 @@ class SessionRunner:
             stop_task.cancel()
             await asyncio.gather(wait_task, stop_task, return_exceptions=True)
 
-    def _requires_initial_input_barrier(self) -> bool:
-        return any(definition.binding is None for definition in self._runtime.definition.inputs)
+    async def _pause_session(self, *, session_id: str, session_ctx) -> None:
+        if self._run_phase != _RunPhase.RUNNING:
+            return
+        if not session_ctx.pause():
+            return
+        if self._coordinator is not None:
+            await self._coordinator.mark_paused(session_id)
+        self._run_phase = _RunPhase.PAUSED
+
+    async def _resume_session(self, *, session_id: str, session_ctx) -> None:
+        if self._run_phase == _RunPhase.READY:
+            self._run_phase = _RunPhase.READY_RESUME_REQUESTED
+            self._resume_event.set()
+            return
+        if self._run_phase != _RunPhase.PAUSED:
+            return
+        if not session_ctx.resume():
+            return
+        if self._coordinator is not None:
+            await self._coordinator.mark_running(session_id)
+        self._run_phase = _RunPhase.RUNNING
 
     @staticmethod
     async def _emit_lifecycle_hook(

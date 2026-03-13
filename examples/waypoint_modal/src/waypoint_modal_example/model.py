@@ -167,6 +167,9 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
         frame_index = 0
         try:
             while self.ctx.running:
+                await self.ctx.wait_if_paused()
+                if not self.ctx.running:
+                    break
                 loop_start_s = asyncio.get_running_loop().time()
                 prompt = self.prompt.strip() or self.model.config.waypoint_default_prompt
                 if prompt != last_prompt:
@@ -188,6 +191,9 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
                     scroll_amount=scroll_amount,
                 )
                 frame, inference_ms = await engine.generate_frame(controls)
+                await self.ctx.wait_if_paused()
+                if not self.ctx.running:
+                    break
                 self.ctx.record_inference_ms(inference_ms)
                 frame_index += 1
                 if frame_index == 1:

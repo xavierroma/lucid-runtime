@@ -521,7 +521,9 @@ class OutputRouter:
 @dataclass(slots=True)
 class ControlOutcome:
     stop_requested: bool = False
+    pause_requested: bool = False
     pong_payload: dict[str, object] | None = None
+    resume_requested: bool = False
 
 
 class SessionControlReducer:
@@ -550,6 +552,10 @@ class SessionControlReducer:
             return ControlOutcome(
                 pong_payload={"client_ts_ms": envelope.payload.get("client_ts_ms")}
             )
+        if envelope.type == ControlMessageType.PAUSE:
+            return ControlOutcome(pause_requested=True)
+        if envelope.type == ControlMessageType.RESUME:
+            return ControlOutcome(resume_requested=True)
         if envelope.type != ControlMessageType.ACTION:
             return ControlOutcome()
 
@@ -558,6 +564,9 @@ class SessionControlReducer:
         args = payload.get("args", {})
         if not name or not isinstance(args, dict):
             self._logger.warning("invalid action payload name=%s args_type=%s", name, type(args))
+            return ControlOutcome()
+        if self._session_ctx.is_paused() and not self._runtime.allows_input_while_paused(name):
+            self._logger.debug("dropping paused action name=%s", name)
             return ControlOutcome()
         try:
             await self._runtime.dispatch_input(self._session_ctx, name, args)

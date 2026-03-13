@@ -180,5 +180,59 @@ async def test_session_close_delegates_to_engine() -> None:
     assert engine.end_calls == 1
 
 
+@pytest.mark.asyncio
+async def test_session_resume_continues_paused_chunk_before_applying_new_prompt() -> None:
+    published: list[np.ndarray] = []
+    first_frame_paused = asyncio.Event()
+    ctx: SessionContext | None = None
+    session = None
+
+    async def generate_chunk(prompt: str, _call_count: int) -> ChunkResult:
+        frames = [_frame(200)] if prompt == "new prompt" else [_frame(10), _frame(11)]
+        return ChunkResult(
+            frames=frames,
+            chunk_ms=1.0,
+            inference_ms=1.0,
+        )
+
+    engine = _StubEngine(generate_chunk)
+    model = _build_model(engine)
+
+    async def publish_fn(_name: str, payload: object, _ts_ms: int | None) -> None:
+        assert ctx is not None
+        assert session is not None
+        published.append(np.array(payload, copy=True))
+        if len(published) == 1:
+            ctx.pause()
+            session.set_prompt("new prompt")
+            first_frame_paused.set()
+            return
+        if len(published) == 3:
+            ctx.running = False
+
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=model.outputs,
+        publish_fn=publish_fn,
+        logger=logging.getLogger("tests.yume_model"),
+    )
+    session = model.create_session(ctx)
+
+    task = asyncio.create_task(session.run())
+    await asyncio.wait_for(first_frame_paused.wait(), timeout=1.0)
+
+    await asyncio.sleep(0.05)
+    assert engine.generate_prompts == ["old prompt"]
+
+    ctx.resume()
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert [int(frame[0, 0, 0]) for frame in published] == [10, 11, 200]
+    assert engine.start_prompts == ["old prompt"]
+    assert engine.updated_prompts == ["new prompt"]
+    assert engine.generate_prompts == ["old prompt", "new prompt"]
+
+
 async def _noop_publish(_name: str, _payload: object, _ts_ms: int | None) -> None:
     return None

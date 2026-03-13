@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { LoaderCircle, Power } from "lucide-react"
+import { LoaderCircle, Pause, Play, Power } from "lucide-react"
 
-import { ConsoleRoom } from "@/components/console-room"
+import { ConsoleRoom, type TransportControlSignal } from "@/components/console-room"
 import {
   EnvironmentStudio,
   type SaveEnvironmentInput,
@@ -48,17 +48,17 @@ const MODEL_OPTIONS: Array<{
   label: string
   fullLabel: string
 }> = [
-  {
-    name: "yume",
-    label: "Yume",
-    fullLabel: "Yume-1.5",
-  },
-  {
-    name: "waypoint",
-    label: "Waypoint",
-    fullLabel: "Waypoint-1.1-Small",
-  },
-]
+    {
+      name: "yume",
+      label: "Yume",
+      fullLabel: "Yume-1.5",
+    },
+    {
+      name: "waypoint",
+      label: "Waypoint",
+      fullLabel: "Waypoint-1.1-Small",
+    },
+  ]
 
 function hasPromptInput(capabilities: Capabilities | null) {
   return Boolean(
@@ -166,6 +166,22 @@ function buildDisplayStatus(args: {
     }
   }
 
+  if (session.state === "READY") {
+    return {
+      label: "READY",
+      detail: "Worker allocated. Waiting for prompt and resume.",
+      tone: "warm",
+    }
+  }
+
+  if (session.state === "PAUSED") {
+    return {
+      label: "PAUSED",
+      detail: "Frame generation paused. Press resume to continue.",
+      tone: "warm",
+    }
+  }
+
   if (trackReady) {
     return {
       label: "LIVE",
@@ -178,14 +194,6 @@ function buildDisplayStatus(args: {
     return {
       label: "SYNCING",
       detail: "Connected to LiveKit. Waiting for the first frame.",
-      tone: "warm",
-    }
-  }
-
-  if (session.state === "READY") {
-    return {
-      label: "READY",
-      detail: "Worker allocated. Session is warming up.",
       tone: "warm",
     }
   }
@@ -217,7 +225,10 @@ export function App() {
   const [endPending, setEndPending] = useState(false)
   const [roomConnected, setRoomConnected] = useState(false)
   const [trackReady, setTrackReady] = useState(false)
+  const [transportControlSignal, setTransportControlSignal] =
+    useState<TransportControlSignal | null>(null)
   const interactionTargetRef = useRef<HTMLDivElement | null>(null)
+  const transportControlSeqRef = useRef(0)
 
   const session = sessionResponse?.session ?? null
   const capabilities = sessionResponse?.capabilities ?? null
@@ -229,6 +240,8 @@ export function App() {
   const selectedEnvironmentPrompt = selectedEnvironment?.prompt.trim() ?? ""
   const canCreateSession = !session || isTerminalSessionState(session.state)
   const hasActiveSession = Boolean(session && !isTerminalSessionState(session.state))
+  const canToggleTransport =
+    session?.state === "RUNNING" || session?.state === "PAUSED"
   const resolvedModel =
     normalizeModelName(capabilities?.manifest.model.name) ?? selectedModel
   const promptSupported = hasPromptInput(capabilities)
@@ -289,6 +302,10 @@ export function App() {
   }, [capabilities?.manifest.model.name])
 
   useEffect(() => {
+    setTransportControlSignal(null)
+  }, [session?.session_id])
+
+  useEffect(() => {
     if (!session?.session_id || isTerminalSessionState(session.state)) {
       setRoomConnected(false)
       setTrackReady(false)
@@ -318,7 +335,7 @@ export function App() {
     void poll()
     const intervalId = window.setInterval(() => {
       void poll()
-    }, 5000)
+    }, 500)
 
     return () => {
       cancelled = true
@@ -340,25 +357,25 @@ export function App() {
       : null
     const nextEnvironment: SavedEnvironment = existing
       ? {
-          ...existing,
-          name: input.name,
-          prompt: input.prompt,
-          updatedAt: timestamp,
-        }
+        ...existing,
+        name: input.name,
+        prompt: input.prompt,
+        updatedAt: timestamp,
+      }
       : {
-          id: createEnvironmentId(),
-          name: input.name,
-          prompt: input.prompt,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        }
+        id: createEnvironmentId(),
+        name: input.name,
+        prompt: input.prompt,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
 
     const nextEnvironments = existing
       ? sortEnvironments(
-          environments.map((environment) =>
-            environment.id === existing.id ? nextEnvironment : environment,
-          ),
-        )
+        environments.map((environment) =>
+          environment.id === existing.id ? nextEnvironment : environment,
+        ),
+      )
       : sortEnvironments([nextEnvironment, ...environments])
 
     setEnvironments(nextEnvironments)
@@ -428,6 +445,17 @@ export function App() {
     await handleEndSession()
   }
 
+  const handleTransportToggle = () => {
+    if (!session || !canToggleTransport) {
+      return
+    }
+    transportControlSeqRef.current += 1
+    setTransportControlSignal({
+      id: transportControlSeqRef.current,
+      type: session.state === "PAUSED" ? "resume" : "pause",
+    })
+  }
+
   if (route === ENVIRONMENT_ROUTE) {
     return (
       <EnvironmentStudio
@@ -456,6 +484,24 @@ export function App() {
             >
               Environments
             </button>
+            {canToggleTransport ? (
+              <button
+                type="button"
+                className={`transport-button ${
+                  session?.state === "PAUSED" ? "transport-button-resume" : ""
+                }`}
+                onClick={handleTransportToggle}
+                disabled={createPending || endPending}
+                aria-label={session?.state === "PAUSED" ? "Resume session" : "Pause session"}
+              >
+                {session?.state === "PAUSED" ? (
+                  <Play className="transport-icon" />
+                ) : (
+                  <Pause className="transport-icon" />
+                )}
+                {session?.state === "PAUSED" ? "Resume" : "Pause"}
+              </button>
+            ) : null}
             <button
               type="button"
               className={`power-button ${hasActiveSession ? "power-button-on" : ""}`}
@@ -483,6 +529,7 @@ export function App() {
                 token={sessionToken}
                 capabilities={capabilities}
                 promptValue={promptSupported ? selectedEnvironmentPrompt : null}
+                transportControlSignal={transportControlSignal}
                 interactionTargetRef={interactionTargetRef}
                 fallback={
                   <div className="screen-fallback">

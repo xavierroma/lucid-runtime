@@ -454,6 +454,9 @@ class SessionContext:
         self._metrics_fn = metrics_fn
         self._inference_ms: deque[float] = deque(maxlen=128)
         self._initial_input_event = asyncio.Event()
+        self._pause_cleared_event = asyncio.Event()
+        self._pause_cleared_event.set()
+        self._paused = False
 
     def record_inference_ms(self, value: float) -> None:
         self._inference_ms.append(float(value))
@@ -483,6 +486,27 @@ class SessionContext:
 
     def mark_input_received(self) -> None:
         self._initial_input_event.set()
+
+    def pause(self) -> bool:
+        if self._paused:
+            return False
+        self._paused = True
+        self._pause_cleared_event.clear()
+        return True
+
+    def resume(self) -> bool:
+        if not self._paused:
+            return False
+        self._paused = False
+        self._pause_cleared_event.set()
+        return True
+
+    def is_paused(self) -> bool:
+        return self._paused
+
+    async def wait_if_paused(self) -> None:
+        while self.running and self._paused:
+            await self._pause_cleared_event.wait()
 
     async def wait_for_initial_input(self, timeout_s: float) -> bool:
         if self._initial_input_event.is_set():
@@ -759,6 +783,15 @@ class LucidRuntime:
 
     async def dispatch_action(self, ctx: SessionContext, name: str, args: dict[str, Any]) -> None:
         await self.dispatch_input(ctx, name, args)
+
+    def allows_input_while_paused(self, name: str) -> bool:
+        definition = self._inputs.get(name)
+        if definition is None:
+            return False
+        binding = definition.binding
+        if binding is None:
+            return name == "set_prompt"
+        return isinstance(binding, HoldBinding | AxisBinding)
 
     def _require_session(self, session_id: str) -> LucidSession[Any]:
         session = self._sessions.get(session_id)

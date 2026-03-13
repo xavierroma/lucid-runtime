@@ -39,12 +39,16 @@ bun run dev
 
 ## Session flow
 
+- Choose a saved environment before powering the session on.
 - Press power to allocate the worker and join the room.
-- Wait for `READY`, then choose the environment you want to launch.
-- Press `Start`; the demo sends `set_prompt` with the selected environment prompt first, then
-  sends `lucid.runtime.start`.
-- When Waypoint is active, the demo mounts a control deck that publishes persistent `set_buttons`
-  state plus transient `mouse_move` and `scroll` actions after the room connects.
+- When the worker reaches `READY`, the demo sends `set_prompt` with the selected environment
+  prompt and then sends a `resume` control message.
+- The worker stays in `READY` until that resume signal arrives, then transitions to `RUNNING`.
+- While `RUNNING`, the toolbar pause control sends `pause`; while `PAUSED`, it sends `resume`.
+- While `PAUSED`, prompt updates plus hold/axis inputs still flow, while press/pointer/wheel
+  inputs are dropped.
+- When Waypoint is active, the demo mounts its control deck after the session becomes live and
+  keeps transient look/scroll controls disabled while paused.
 
 ## Build
 
