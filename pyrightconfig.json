@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/pyright/main/packages/pyright/schema/pyrightconfig.schema.json",
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "standard",
+  "useLibraryCodeForTypes": true,
+  "reportMissingTypeStubs": "none",
+  "include": [
+    "packages/*/src",
+    "packages/*/tests",
+    "examples/*/src",
+    "examples/*/tests",
+    "scripts"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    "**/build",
+    "**/dist",
+    "target"
+  ],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "packages/lucid/src",
+        "packages/lucid-host/src",
+        "packages/lucid-modal/src",
+        "packages/lucid-dev/src",
+        "examples/waypoint_modal/src",
+        "examples/helios_modal/src",
+        "examples/yume_modal/src"
+      ]
+    }
+  ]
+}

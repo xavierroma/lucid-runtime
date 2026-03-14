@@ -1,0 +1,34 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.pythonPath": "${workspaceFolder}/.venv/bin/python",
+    "python.venvPath": "${workspaceFolder}",
+    "cursorpyright.importStrategy": "fromEnvironment",
+    "cursorpyright.analysis.useLibraryCodeForTypes": true,
+    "cursorpyright.analysis.diagnosticMode": "openFilesOnly",
+    "cursorpyright.analysis.extraPaths": [
+      "${workspaceFolder}/packages/lucid/src",
+      "${workspaceFolder}/packages/lucid-host/src",
+      "${workspaceFolder}/packages/lucid-modal/src",
+      "${workspaceFolder}/packages/lucid-dev/src",
+      "${workspaceFolder}/examples/waypoint_modal/src",
+      "${workspaceFolder}/examples/helios_modal/src",
+      "${workspaceFolder}/examples/yume_modal/src"
+    ],
+    "mypy-type-checker.importStrategy": "fromEnvironment",
+    "mypy-type-checker.interpreter": [
+      "${workspaceFolder}/.venv/bin/python"
+    ],
+    "mypy-type-checker.cwd": "${workspaceFolder}",
+    "mypy-type-checker.args": [
+      "--config-file",
+      "${workspaceFolder}/mypy.ini"
+    ],
+    "mypy-type-checker.reportingScope": "file"
+  }
+}
