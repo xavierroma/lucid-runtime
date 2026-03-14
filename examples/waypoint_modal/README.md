@@ -80,11 +80,27 @@ For debugging a `device-side assert`, set `CUDA_LAUNCH_BLOCKING=1` in the env fi
 
 ## Run through the demo
 
-Start the local coordinator with the deployed Modal dispatch URL and your LiveKit credentials, then run the demo app:
+After `uv run lucid-modal deploy --env-file .env.waypoint`, run the local coordinator, expose it to the Modal worker with ngrok, and start the demo:
 
 ```bash
-cargo run -p coordinator
-cd apps/demo && bun run dev
+sed "s#/opt/lucid/contracts/generated#$(pwd)/packages/contracts/generated#g" \
+  apps/coordinator/coordinator.models.json \
+  > /tmp/lucid-coordinator.models.local.json
+
+ngrok http 8080
+
+set -a
+source apps/coordinator/.env
+export COORDINATOR_CALLBACK_BASE_URL=https://YOUR-NGROK-URL.ngrok-free.app
+export COORDINATOR_MODELS_FILE=/tmp/lucid-coordinator.models.local.json
+export COORDINATOR_BIND_ADDR=127.0.0.1:8080
+set +a
+cargo run --manifest-path apps/coordinator/Cargo.toml
+
+cd apps/demo
+env VITE_COORDINATOR_PROXY_TARGET=http://127.0.0.1:8080 \
+  COORDINATOR_API_KEY="$API_KEY" \
+  bun run dev --host 127.0.0.1 --port 4173
 ```
 
-The demo renders the generated manifest, subscribes to `main_video`, and registers only the keyboard and mouse listeners declared by the Waypoint input bindings.
+Copy the HTTPS forwarding URL from ngrok into `COORDINATOR_CALLBACK_BASE_URL`, then open `http://127.0.0.1:4173/`. The demo will talk to the local coordinator, while the Modal worker reports lifecycle updates back through ngrok.
