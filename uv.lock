@@ -99,6 +99,20 @@ wheels = [
 ]
 
 [[package]]
+name = "av"
+version = "13.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0c/9d/486d31e76784cc0ad943f420c5e05867263b32b37e2f4b0f7f22fdc1ca3a/av-13.1.0.tar.gz", hash = "sha256:d3da736c55847d8596eb8c26c60e036f193001db3bc5c10da8665622d906c17e", size = 3957908, upload-time = "2024-10-06T04:54:57.507Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/39/54/c4227080c9700384db90072ace70d89b6a288b3748bd2ec0e32580a49e7f/av-13.1.0-cp311-cp311-macosx_10_13_x86_64.whl", hash = "sha256:867385e6701464a5c95903e24d2e0df1c7e0dbf211ed91d0ce639cd687373e10", size = 24255112, upload-time = "2024-10-06T04:52:48.49Z" },
+    { url = "https://files.pythonhosted.org/packages/32/4a/eb9348231655ca99b200b380f4edbceff7358c927a285badcc84b18fb1c9/av-13.1.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:cb7a3f319401a46b0017771268ff4928501e77cf00b1a2aa0721e20b2fd1146e", size = 19467930, upload-time = "2024-10-06T04:52:52.118Z" },
+    { url = "https://files.pythonhosted.org/packages/14/c7/48c80252bdbc3a75a54dd205a7fab8f613914009b9e5416202757208e040/av-13.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ad904f860147bceaca65b0d3174a8153f35c570d465161d210f1879970b15559", size = 32207671, upload-time = "2024-10-06T04:52:55.82Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/66/3332c7fa8c43b65680a94f279ea3e832b5500de3a1392bac6112881e984b/av-13.1.0-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:a906e017b29d0eb80d9ccf7a98d19268122da792dbb68eb741cfebba156e6aed", size = 31520911, upload-time = "2024-10-06T04:52:59.231Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/bb/2e03acb9b27591d97f700a3a6c27cfd1bc53fa148177747eda8a70cca1e9/av-13.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5ce894d7847897da7be63277a0875bd93c51327134ac226c67978de014c7979f", size = 34048399, upload-time = "2024-10-06T04:53:03.934Z" },
+    { url = "https://files.pythonhosted.org/packages/85/44/527aa3b65947d42cfe829326026edf0cd1a8c459390076034be275616c36/av-13.1.0-cp311-cp311-win_amd64.whl", hash = "sha256:384bcdb5fc3238a263a5a25cc9efc690859fa4148cc4b07e00fae927178db22a", size = 25779569, upload-time = "2024-10-06T04:53:07.582Z" },
+]
+
+[[package]]
 name = "basedpyright"
 version = "1.38.2"
 source = { registry = "https://pypi.org/simple" }
@@ -237,8 +251,7 @@ name = "helios-modal-example"
 version = "0.1.0"
 source = { editable = "examples/helios_modal" }
 dependencies = [
-    { name = "lucid-modal" },
-    { name = "lucid-runtime" },
+    { name = "lucid-runtime", extra = ["modal"] },
     { name = "modal" },
     { name = "numpy" },
     { name = "pydantic" },
@@ -252,8 +265,7 @@ requires-dist = [
     { name = "huggingface-hub", marker = "extra == 'helios'", specifier = ">=0.36.0" },
     { name = "imageio", marker = "extra == 'helios'", specifier = ">=2.36.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'helios'", specifier = ">=0.5.1" },
-    { name = "lucid-modal", editable = "packages/lucid-modal" },
-    { name = "lucid-runtime", editable = "packages/lucid" },
+    { name = "lucid-runtime", extras = ["modal"], editable = "packages/lucid" },
     { name = "modal", specifier = ">=1.3.5" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pydantic", specifier = ">=2.8,<3" },
@@ -354,78 +366,21 @@ wheels = [
 ]
 
 [[package]]
-name = "lucid-dev"
-version = "0.1.0"
-source = { editable = "packages/lucid-dev" }
+name = "livekit"
+version = "0.13.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "fastapi" },
-    { name = "lucid-host" },
-    { name = "lucid-runtime" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "uvicorn" },
+    { name = "protobuf" },
+    { name = "types-protobuf" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "lucid-host", editable = "packages/lucid-host" },
-    { name = "lucid-runtime", editable = "packages/lucid" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3,<9" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24,<0.25" },
-    { name = "pyyaml", specifier = ">=6,<7" },
-    { name = "uvicorn", specifier = ">=0.34,<0.35" },
+sdist = { url = "https://files.pythonhosted.org/packages/4b/e3/4378dd09be36ff1f64dcbb9d484823132d4740b1012bd9e905fc707f4aa2/livekit-0.13.1.tar.gz", hash = "sha256:14c23610ae960c7722c9ce65d84aa951a045e7e27c9128db3e2679f0419bb60d", size = 67777, upload-time = "2024-08-22T03:03:36.804Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/df/34/5d03a72a79efb05812041c9c62ce6f63acd76c8a79dd3f64d48be8722f93/livekit-0.13.1-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:dc04fe0899f3cf68a6c70a80fd5ad193a42dbca949874c08448bf8bf2e3551c6", size = 10425200, upload-time = "2024-08-22T03:03:25.315Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/01/688e8afea0d81343e456942137d13e50310a699856f55f415ac930ed2d25/livekit-0.13.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:1581e4dbff7a84b3f154fd1e80adb490396493dad73b164873d3c18b67e4d1de", size = 9097831, upload-time = "2024-08-22T03:03:27.822Z" },
+    { url = "https://files.pythonhosted.org/packages/39/cc/4b7e243c5cdfb1deca7bae748a9bcf3c11994b2b5f3ce5983bba124850ee/livekit-0.13.1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:f38cf01400c5f6a9b8610778d0ba1b38e794a12942b7f312bbbe799189332577", size = 10001621, upload-time = "2024-08-22T03:03:30.155Z" },
+    { url = "https://files.pythonhosted.org/packages/02/1a/419ea768e1597884c7bc1df99636761a3e06ed170d4e7e3bd6514d05f73f/livekit-0.13.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:8a57270bdd665ca3abc4a9790325ea3f1418675ff86369fc890b3336cfe5bf0a", size = 11500824, upload-time = "2024-08-22T03:03:32.211Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/3c/1836f615133fa07e5d96ca8b71fa50d607d3bee2b51c9028ce51670377a1/livekit-0.13.1-py3-none-win_amd64.whl", hash = "sha256:40cda3c065d132974fe3ea6f30b7a6297f7e1d2edc149687e66305e0a64750b2", size = 10167294, upload-time = "2024-08-22T03:03:34.387Z" },
 ]
-provides-extras = ["test"]
-
-[[package]]
-name = "lucid-host"
-version = "0.1.0"
-source = { editable = "packages/lucid-host" }
-dependencies = [
-    { name = "httpx" },
-    { name = "lucid-runtime" },
-    { name = "numpy" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "av", marker = "extra == 'livekit'", specifier = ">=13,<14" },
-    { name = "httpx", specifier = ">=0.27,<1" },
-    { name = "livekit", marker = "extra == 'livekit'", specifier = ">=0.13,<0.14" },
-    { name = "lucid-runtime", editable = "packages/lucid" },
-    { name = "numpy", specifier = ">=1.26,<3" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3,<9" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24,<0.25" },
-]
-provides-extras = ["livekit", "test"]
-
-[[package]]
-name = "lucid-modal"
-version = "0.1.0"
-source = { editable = "packages/lucid-modal" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "lucid-host" },
-    { name = "lucid-runtime" },
-    { name = "modal" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "lucid-host", editable = "packages/lucid-host" },
-    { name = "lucid-runtime", editable = "packages/lucid" },
-    { name = "modal", specifier = ">=1.3.5" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3,<9" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24,<0.25" },
-]
-provides-extras = ["test"]
 
 [[package]]
 name = "lucid-runtime"
@@ -436,14 +391,32 @@ dependencies = [
     { name = "pydantic" },
 ]
 
+[package.optional-dependencies]
+livekit = [
+    { name = "av" },
+    { name = "httpx" },
+    { name = "livekit" },
+]
+modal = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "modal" },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "av", marker = "extra == 'livekit'", specifier = ">=13,<14" },
+    { name = "fastapi", marker = "extra == 'modal'", specifier = ">=0.115,<1" },
+    { name = "httpx", marker = "extra == 'livekit'", specifier = ">=0.27,<1" },
+    { name = "httpx", marker = "extra == 'modal'", specifier = ">=0.27,<1" },
+    { name = "livekit", marker = "extra == 'livekit'", specifier = ">=0.13,<0.14" },
+    { name = "modal", marker = "extra == 'modal'", specifier = ">=1.3.5" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24,<0.25" },
 ]
-provides-extras = ["test"]
+provides-extras = ["livekit", "modal", "test"]
 
 [[package]]
 name = "lucid-runtime-monorepo"
@@ -452,10 +425,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "basedpyright" },
     { name = "helios-modal-example" },
-    { name = "lucid-dev" },
-    { name = "lucid-host" },
-    { name = "lucid-modal" },
-    { name = "lucid-runtime" },
+    { name = "lucid-runtime", extra = ["livekit", "modal"] },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -468,10 +438,7 @@ dependencies = [
 requires-dist = [
     { name = "basedpyright", specifier = ">=1.31,<2" },
     { name = "helios-modal-example", editable = "examples/helios_modal" },
-    { name = "lucid-dev", editable = "packages/lucid-dev" },
-    { name = "lucid-host", editable = "packages/lucid-host" },
-    { name = "lucid-modal", editable = "packages/lucid-modal" },
-    { name = "lucid-runtime", editable = "packages/lucid" },
+    { name = "lucid-runtime", extras = ["livekit", "modal"], editable = "packages/lucid" },
     { name = "mypy", specifier = ">=1.18,<2" },
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", specifier = ">=0.24,<0.25" },
@@ -807,23 +774,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyyaml"
-version = "6.0.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz", hash = "sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f", size = 130960, upload-time = "2025-09-25T21:33:16.546Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/16/a95b6757765b7b031c9374925bb718d55e0a9ba8a1b6a12d25962ea44347/pyyaml-6.0.3-cp311-cp311-macosx_10_13_x86_64.whl", hash = "sha256:44edc647873928551a01e7a563d7452ccdebee747728c1080d881d68af7b997e", size = 185826, upload-time = "2025-09-25T21:31:58.655Z" },
-    { url = "https://files.pythonhosted.org/packages/16/19/13de8e4377ed53079ee996e1ab0a9c33ec2faf808a4647b7b4c0d46dd239/pyyaml-6.0.3-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:652cb6edd41e718550aad172851962662ff2681490a8a711af6a4d288dd96824", size = 175577, upload-time = "2025-09-25T21:32:00.088Z" },
-    { url = "https://files.pythonhosted.org/packages/0c/62/d2eb46264d4b157dae1275b573017abec435397aa59cbcdab6fc978a8af4/pyyaml-6.0.3-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:10892704fc220243f5305762e276552a0395f7beb4dbf9b14ec8fd43b57f126c", size = 775556, upload-time = "2025-09-25T21:32:01.31Z" },
-    { url = "https://files.pythonhosted.org/packages/10/cb/16c3f2cf3266edd25aaa00d6c4350381c8b012ed6f5276675b9eba8d9ff4/pyyaml-6.0.3-cp311-cp311-manylinux2014_s390x.manylinux_2_17_s390x.manylinux_2_28_s390x.whl", hash = "sha256:850774a7879607d3a6f50d36d04f00ee69e7fc816450e5f7e58d7f17f1ae5c00", size = 882114, upload-time = "2025-09-25T21:32:03.376Z" },
-    { url = "https://files.pythonhosted.org/packages/71/60/917329f640924b18ff085ab889a11c763e0b573da888e8404ff486657602/pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d", size = 806638, upload-time = "2025-09-25T21:32:04.553Z" },
-    { url = "https://files.pythonhosted.org/packages/dd/6f/529b0f316a9fd167281a6c3826b5583e6192dba792dd55e3203d3f8e655a/pyyaml-6.0.3-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:1d37d57ad971609cf3c53ba6a7e365e40660e3be0e5175fa9f2365a379d6095a", size = 767463, upload-time = "2025-09-25T21:32:06.152Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/6a/b627b4e0c1dd03718543519ffb2f1deea4a1e6d42fbab8021936a4d22589/pyyaml-6.0.3-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:37503bfbfc9d2c40b344d06b2199cf0e96e97957ab1c1b546fd4f87e53e5d3e4", size = 794986, upload-time = "2025-09-25T21:32:07.367Z" },
-    { url = "https://files.pythonhosted.org/packages/45/91/47a6e1c42d9ee337c4839208f30d9f09caa9f720ec7582917b264defc875/pyyaml-6.0.3-cp311-cp311-win32.whl", hash = "sha256:8098f252adfa6c80ab48096053f512f2321f0b998f98150cea9bd23d83e1467b", size = 142543, upload-time = "2025-09-25T21:32:08.95Z" },
-    { url = "https://files.pythonhosted.org/packages/da/e3/ea007450a105ae919a72393cb06f122f288ef60bba2dc64b26e2646fa315/pyyaml-6.0.3-cp311-cp311-win_amd64.whl", hash = "sha256:9f3bfb4965eb874431221a3ff3fdcddc7e74e3b07799e0e84ca4a0f867d449bf", size = 158763, upload-time = "2025-09-25T21:32:09.96Z" },
-]
-
-[[package]]
 name = "rich"
 version = "14.3.3"
 source = { registry = "https://pypi.org/simple" }
@@ -904,6 +854,15 @@ wheels = [
 ]
 
 [[package]]
+name = "types-protobuf"
+version = "6.32.1.20260221"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/e2/9aa4a3b2469508bd7b4e2ae11cbedaf419222a09a1b94daffcd5efca4023/types_protobuf-6.32.1.20260221.tar.gz", hash = "sha256:6d5fb060a616bfb076cbb61b4b3c3969f5fc8bec5810f9a2f7e648ee5cbcbf6e", size = 64408, upload-time = "2026-02-21T03:55:13.916Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/e8/1fd38926f9cf031188fbc5a96694203ea6f24b0e34bd64a225ec6f6291ba/types_protobuf-6.32.1.20260221-py3-none-any.whl", hash = "sha256:da7cdd947975964a93c30bfbcc2c6841ee646b318d3816b033adc2c4eb6448e4", size = 77956, upload-time = "2026-02-21T03:55:12.894Z" },
+]
+
+[[package]]
 name = "types-pyyaml"
 version = "6.0.12.20250915"
 source = { registry = "https://pypi.org/simple" }
@@ -943,19 +902,6 @@ wheels = [
 ]
 
 [[package]]
-name = "uvicorn"
-version = "0.34.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "h11" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/de/ad/713be230bcda622eaa35c28f0d328c3675c371238470abdea52417f17a8e/uvicorn-0.34.3.tar.gz", hash = "sha256:35919a9a979d7a59334b6b10e05d77c1d0d574c50e0fc98b8b1a0f165708b55a", size = 76631, upload-time = "2025-06-01T07:48:17.531Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6d/0d/8adfeaa62945f90d19ddc461c55f4a50c258af7662d34b6a3d5d1f8646f6/uvicorn-0.34.3-py3-none-any.whl", hash = "sha256:16246631db62bdfbf069b0645177d6e8a77ba950cfedbfd093acef9444e4d885", size = 62431, upload-time = "2025-06-01T07:48:15.664Z" },
-]
-
-[[package]]
 name = "watchfiles"
 version = "1.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -988,8 +934,7 @@ name = "waypoint-modal-example"
 version = "0.1.0"
 source = { editable = "examples/waypoint_modal" }
 dependencies = [
-    { name = "lucid-modal" },
-    { name = "lucid-runtime" },
+    { name = "lucid-runtime", extra = ["modal"] },
     { name = "modal" },
     { name = "numpy" },
     { name = "pillow" },
@@ -1003,8 +948,7 @@ requires-dist = [
     { name = "einops", marker = "extra == 'waypoint'" },
     { name = "ftfy", marker = "extra == 'waypoint'" },
     { name = "huggingface-hub", marker = "extra == 'waypoint'", specifier = "==0.36.0" },
-    { name = "lucid-modal", editable = "packages/lucid-modal" },
-    { name = "lucid-runtime", editable = "packages/lucid" },
+    { name = "lucid-runtime", extras = ["modal"], editable = "packages/lucid" },
     { name = "modal", specifier = ">=1.3.5" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "omegaconf", marker = "extra == 'waypoint'" },
@@ -1059,8 +1003,7 @@ name = "yume-modal-example"
 version = "0.1.0"
 source = { editable = "examples/yume_modal" }
 dependencies = [
-    { name = "lucid-modal" },
-    { name = "lucid-runtime" },
+    { name = "lucid-runtime", extra = ["modal"] },
     { name = "modal" },
     { name = "numpy" },
     { name = "pydantic" },
@@ -1076,8 +1019,7 @@ requires-dist = [
     { name = "ftfy", marker = "extra == 'yume'", specifier = ">=6.3,<7" },
     { name = "imageio", marker = "extra == 'yume'", specifier = "==2.36.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'yume'", specifier = "==0.5.1" },
-    { name = "lucid-modal", editable = "packages/lucid-modal" },
-    { name = "lucid-runtime", editable = "packages/lucid" },
+    { name = "lucid-runtime", extras = ["modal"], editable = "packages/lucid" },
     { name = "modal", specifier = ">=1.3.5" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "peft", marker = "extra == 'yume'", specifier = "==0.13.2" },

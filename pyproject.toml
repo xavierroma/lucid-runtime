@@ -9,10 +9,7 @@ dependencies = [
   "pytest>=8.3,<9",
   "pytest-asyncio>=0.24,<0.25",
   "types-PyYAML>=6.0.12.20250915",
-  "lucid-runtime>=0.1,<0.2",
-  "lucid-host>=0.1,<0.2",
-  "lucid-modal>=0.1,<0.2",
-  "lucid-dev>=0.1,<0.2",
+  "lucid-runtime[livekit,modal]>=0.1,<0.2",
   "waypoint-modal-example>=0.1,<0.2",
   "helios-modal-example>=0.1,<0.2",
   "yume-modal-example>=0.1,<0.2",
@@ -23,9 +20,6 @@ package = false
 
 [tool.uv.sources]
 lucid-runtime = { path = "packages/lucid", editable = true }
-lucid-host = { path = "packages/lucid-host", editable = true }
-lucid-modal = { path = "packages/lucid-modal", editable = true }
-lucid-dev = { path = "packages/lucid-dev", editable = true }
 waypoint-modal-example = { path = "examples/waypoint_modal", editable = true }
 helios-modal-example = { path = "examples/helios_modal", editable = true }
 yume-modal-example = { path = "examples/yume_modal", editable = true }

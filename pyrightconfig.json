@@ -7,7 +7,8 @@
   "useLibraryCodeForTypes": true,
   "reportMissingTypeStubs": "none",
   "include": [
-    "packages/*/src",
+    "packages/lucid/lucid",
+    "packages/lucid/tests",
     "packages/*/tests",
     "examples/*/src",
     "examples/*/tests",
@@ -24,10 +25,7 @@
     {
       "root": ".",
       "extraPaths": [
-        "packages/lucid/src",
-        "packages/lucid-host/src",
-        "packages/lucid-modal/src",
-        "packages/lucid-dev/src",
+        "packages/lucid",
         "examples/waypoint_modal/src",
         "examples/helios_modal/src",
         "examples/yume_modal/src"
