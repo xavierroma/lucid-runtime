@@ -12,10 +12,7 @@
     "cursorpyright.analysis.useLibraryCodeForTypes": true,
     "cursorpyright.analysis.diagnosticMode": "openFilesOnly",
     "cursorpyright.analysis.extraPaths": [
-      "${workspaceFolder}/packages/lucid/src",
-      "${workspaceFolder}/packages/lucid-host/src",
-      "${workspaceFolder}/packages/lucid-modal/src",
-      "${workspaceFolder}/packages/lucid-dev/src",
+      "${workspaceFolder}/packages/lucid",
       "${workspaceFolder}/examples/waypoint_modal/src",
       "${workspaceFolder}/examples/helios_modal/src",
       "${workspaceFolder}/examples/yume_modal/src"
