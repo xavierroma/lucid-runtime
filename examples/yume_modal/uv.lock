@@ -817,49 +817,40 @@ wheels = [
 ]
 
 [[package]]
-name = "lucid-modal"
-version = "0.1.0"
-source = { editable = "../../packages/lucid-modal" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "lucid-runtime" },
-    { name = "modal" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "lucid-runtime", editable = "../../packages/lucid" },
-    { name = "modal", specifier = ">=1.3.5" },
-    { name = "pydantic", specifier = ">=2.8,<3" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3,<9" },
-    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24,<0.25" },
-]
-provides-extras = ["test"]
-
-[[package]]
 name = "lucid-runtime"
 version = "0.1.0"
 source = { editable = "../../packages/lucid" }
 dependencies = [
-    { name = "httpx" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pydantic" },
 ]
 
+[package.optional-dependencies]
+modal = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "modal" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "av", marker = "extra == 'livekit'", specifier = ">=13,<14" },
-    { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.115,<1" },
+    { name = "fastapi", marker = "extra == 'modal'", specifier = ">=0.115,<1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27,<1" },
+    { name = "httpx", marker = "extra == 'livekit'", specifier = ">=0.27,<1" },
+    { name = "httpx", marker = "extra == 'modal'", specifier = ">=0.27,<1" },
     { name = "livekit", marker = "extra == 'livekit'", specifier = ">=0.13,<0.14" },
+    { name = "modal", marker = "extra == 'modal'", specifier = ">=1.3.5" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pydantic", specifier = ">=2.8,<3" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=0.24,<0.25" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6,<7" },
+    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.34,<0.35" },
 ]
-provides-extras = ["livekit", "test"]
+provides-extras = ["livekit", "modal", "dev", "test"]
 
 [[package]]
 name = "markdown-it-py"
@@ -2809,8 +2800,7 @@ name = "yume-modal-example"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "lucid-modal" },
-    { name = "lucid-runtime" },
+    { name = "lucid-runtime", extra = ["modal"] },
     { name = "modal" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -2849,8 +2839,7 @@ requires-dist = [
     { name = "ftfy", marker = "extra == 'yume'", specifier = ">=6.3,<7" },
     { name = "imageio", marker = "extra == 'yume'", specifier = "==2.36.0" },
     { name = "imageio-ffmpeg", marker = "extra == 'yume'", specifier = "==0.5.1" },
-    { name = "lucid-modal", editable = "../../packages/lucid-modal" },
-    { name = "lucid-runtime", editable = "../../packages/lucid" },
+    { name = "lucid-runtime", extras = ["modal"], editable = "../../packages/lucid" },
     { name = "modal", specifier = ">=1.3.5" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "peft", marker = "extra == 'yume'", specifier = "==0.13.2" },

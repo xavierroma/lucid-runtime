@@ -1,9 +1,8 @@
 # Helios-Distilled on Modal
 
-This example shows how to port a prompt-driven video model to the Lucid runtime using the same package split as the existing examples:
+This example shows how to port a prompt-driven video model to the Lucid runtime using the same single-package layout as the existing examples:
 
-- [`packages/lucid`](../../packages/lucid) owns the reusable runtime contract.
-- [`packages/lucid-modal`](../../packages/lucid-modal) owns the Modal worker lifecycle and helper CLI.
+- [`packages/lucid`](../../packages/lucid) owns the reusable runtime contract, LiveKit host, Modal adapter, and dev helpers.
 - [`src/helios_modal_example`](src/helios_modal_example) owns the Helios-specific config, engine, model, and Modal wrapper.
 
 ## Port boundary
@@ -11,8 +10,8 @@ This example shows how to port a prompt-driven video model to the Lucid runtime 
 The Helios-specific Lucid layer is intentionally small:
 
 - [`model.py`](src/helios_modal_example/model.py) defines `HeliosLucidModel` and `HeliosSession`.
-- [`config.py`](src/helios_modal_example/config.py) defines the env-backed model config.
-- [`modal_app.py`](src/helios_modal_example/modal_app.py) defines only the Helios-specific Modal image, env, volumes, and `download_model`, then delegates worker wiring to `lucid_modal.create_app(...)`.
+- [`config.py`](src/helios_modal_example/config.py) defines the model config and fixed video contract.
+- [`modal_app.py`](src/helios_modal_example/modal_app.py) defines only the Helios-specific Modal image, env, volumes, and `download_model`, then delegates worker wiring to `lucid.modal.create_app(...)`.
 
 [`engine.py`](src/helios_modal_example/engine.py) is ordinary model-serving code. It wraps the Hugging Face `HeliosPyramidPipeline`, generates one chunk per call, and feeds the previously emitted chunk back in as `video=` conditioning so Lucid can keep a long-running session alive.
 

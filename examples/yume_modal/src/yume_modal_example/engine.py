@@ -8,7 +8,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .config import YumeRuntimeConfig
+from .config import (
+    YUME_FRAME_HEIGHT,
+    YUME_FRAME_WIDTH,
+    YumeRuntimeConfig,
+)
 from .single_gpu_runtime import YumeSingleGpuRuntime, YumeSingleGpuRuntimeError
 
 
@@ -38,12 +42,7 @@ class YumeEngine:
             self._logger.info("reusing preloaded yume engine on %s", self._device)
             return
 
-        if self._config.wm_engine not in {"fake", "yume"}:
-            raise YumeEngineError(
-                f"unsupported WM_ENGINE={self._config.wm_engine}; expected fake or yume"
-            )
-
-        if self._config.wm_engine == "fake":
+        if self._config.backend == "fake":
             self._logger.info("starting in fake engine mode")
             self._loaded = True
             return
@@ -52,10 +51,10 @@ class YumeEngine:
         try:
             import torch
         except Exception as exc:  # pragma: no cover - runtime environment dependent
-            raise YumeEngineError("failed importing torch for WM_ENGINE=yume") from exc
+            raise YumeEngineError("failed importing torch for Yume backend=real") from exc
 
         if not torch.cuda.is_available():
-            raise YumeEngineError("CUDA is required for WM_ENGINE=yume")
+            raise YumeEngineError("CUDA is required for Yume backend=real")
 
         if not self._config.yume_model_dir.exists():
             raise YumeEngineError(
@@ -85,8 +84,8 @@ class YumeEngine:
         torch.backends.cuda.matmul.allow_tf32 = True
         runtime: YumeSingleGpuRuntime = YumeSingleGpuRuntime(
             model_dir=self._config.yume_model_dir,
-            frame_width=self._config.frame_width,
-            frame_height=self._config.frame_height,
+            frame_width=YUME_FRAME_WIDTH,
+            frame_height=YUME_FRAME_HEIGHT,
             device=self._device,
             logger=self._logger,
         )
@@ -130,7 +129,7 @@ class YumeEngine:
         if not self._loaded:
             raise YumeEngineError("engine must be loaded before generating frames")
         started = time.perf_counter()
-        if self._config.wm_engine == "fake":
+        if self._config.backend == "fake":
             frames = self._generate_fake_chunk()
         else:
             if self._runtime is None:
@@ -153,8 +152,8 @@ class YumeEngine:
             self._runtime.reset_session_state()
 
     def _generate_fake_chunk(self) -> list[np.ndarray]:
-        height = int(self._config.frame_height)
-        width = int(self._config.frame_width)
+        height = YUME_FRAME_HEIGHT
+        width = YUME_FRAME_WIDTH
         chunk_frames = max(1, int(self._config.yume_chunk_frames))
         digest = hashlib.sha256(self._prompt.encode("utf-8")).digest()
         base = np.frombuffer(digest[:3], dtype=np.uint8).astype(np.uint16)

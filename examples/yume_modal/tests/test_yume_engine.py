@@ -8,17 +8,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from yume_modal_example.config import YumeRuntimeConfig
+from yume_modal_example.config import YUME_FRAME_HEIGHT, YUME_FRAME_WIDTH, YumeRuntimeConfig
 from yume_modal_example.engine import YumeEngine
 
 
 @pytest.fixture
 def fake_engine_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LIVEKIT_URL", "wss://example.livekit.invalid")
-    monkeypatch.setenv("WM_ENGINE", "fake")
-    monkeypatch.setenv("WM_LIVEKIT_MODE", "fake")
-    monkeypatch.setenv("WM_FRAME_WIDTH", "64")
-    monkeypatch.setenv("WM_FRAME_HEIGHT", "64")
     monkeypatch.setenv("YUME_CHUNK_FRAMES", "2")
     monkeypatch.setenv(
         "YUME_BASE_PROMPT",
@@ -27,14 +22,14 @@ def fake_engine_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _build_engine() -> tuple[YumeEngine, YumeRuntimeConfig]:
-    runtime_config = YumeRuntimeConfig.from_env()
+    runtime_config = YumeRuntimeConfig.from_env().model_copy(update={"backend": "fake"})
     engine = YumeEngine(runtime_config, logging.getLogger("tests.yume_engine"))
     return engine, runtime_config
 
 
 @pytest.mark.asyncio
 async def test_fake_engine_generates_rgb_frames_without_torch(fake_engine_env: None) -> None:
-    engine, host_config = _build_engine()
+    engine, _runtime_config = _build_engine()
 
     await engine.load()
     await engine.start_session("A snowy pine forest at dawn")
@@ -44,8 +39,8 @@ async def test_fake_engine_generates_rgb_frames_without_torch(fake_engine_env: N
     assert chunk.chunk_ms >= chunk.inference_ms
     assert chunk.inference_ms >= 0
     assert chunk.frames[0].shape == (
-        host_config.frame_height,
-        host_config.frame_width,
+        YUME_FRAME_HEIGHT,
+        YUME_FRAME_WIDTH,
         3,
     )
     assert chunk.frames[0].dtype == np.uint8
@@ -90,14 +85,7 @@ class _BlockingRuntime:
 async def test_real_mode_generation_does_not_block_event_loop() -> None:
     engine = YumeEngine(
         YumeRuntimeConfig(
-            livekit_url="wss://example.livekit.invalid",
-            frame_width=64,
-            frame_height=64,
-            target_fps=8,
-            status_topic="wm.status",
-            max_queue_frames=4,
-            livekit_mode="fake",
-            wm_engine="yume",
+            backend="real",
             yume_model_dir=Path("/tmp/yume"),
             yume_chunk_frames=2,
             yume_base_prompt="A forest trail at dawn",
@@ -138,4 +126,6 @@ async def test_real_mode_generation_does_not_block_event_loop() -> None:
 def test_runtime_config_from_env_reads_model_env(fake_engine_env: None) -> None:
     runtime_config = YumeRuntimeConfig.from_env()
 
-    assert runtime_config.target_fps == 2
+    assert runtime_config.backend == "real"
+    assert runtime_config.yume_chunk_frames == 2
+    assert runtime_config.yume_base_prompt == "POV of a character walking in a minecraft scene"

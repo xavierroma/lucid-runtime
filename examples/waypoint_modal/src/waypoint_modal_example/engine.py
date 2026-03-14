@@ -11,7 +11,12 @@ from typing import Any
 
 import numpy as np
 
-from .config import WaypointRuntimeConfig
+from .config import (
+    WAYPOINT_FRAME_HEIGHT,
+    WAYPOINT_FRAME_WIDTH,
+    WaypointRuntimeConfig,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class WaypointControlState:
@@ -43,8 +48,8 @@ class WaypointEngine:
                 "waypoint.engine.load engine_ready elapsed_ms=%.1f model_source=%s frame_width=%s frame_height=%s warmup=%s",
                 (perf_counter() - start) * 1000.0,
                 self._config.waypoint_model_source,
-                self._config.frame_width,
-                self._config.frame_height,
+                WAYPOINT_FRAME_WIDTH,
+                WAYPOINT_FRAME_HEIGHT,
                 warmup,
             )
             self._seed_frame = self._load_seed_frame()
@@ -258,8 +263,8 @@ class WaypointEngine:
             frame = frame.contiguous()
 
         expected_shape = (
-            int(self._config.frame_height),
-            int(self._config.frame_width),
+            WAYPOINT_FRAME_HEIGHT,
+            WAYPOINT_FRAME_WIDTH,
             3,
         )
         if tuple(frame.shape) != expected_shape:
@@ -340,8 +345,8 @@ class WaypointEngine:
 
     def _load_seed_frame(self) -> np.ndarray:
         start = perf_counter()
-        height = int(self._config.frame_height)
-        width = int(self._config.frame_width)
+        height = WAYPOINT_FRAME_HEIGHT
+        width = WAYPOINT_FRAME_WIDTH
         seed_path = self._config.waypoint_seed_image
         if seed_path is not None:
             frame = self._load_seed_image_from_path(seed_path, width=width, height=height)

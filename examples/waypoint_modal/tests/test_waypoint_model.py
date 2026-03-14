@@ -48,10 +48,6 @@ class _StubEngine:
 
 def _runtime_config() -> WaypointRuntimeConfig:
     return WaypointRuntimeConfig(
-        frame_width=640,
-        frame_height=360,
-        target_fps=100,
-        wm_engine="waypoint",
         waypoint_model_source="/models/Waypoint-1.1-Small",
         waypoint_ae_source="/models/owl_vae_f16_c16_distill_v0_nogan",
         waypoint_prompt_encoder_source="/models/google-umt5-xl",

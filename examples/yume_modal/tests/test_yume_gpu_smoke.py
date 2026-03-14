@@ -31,11 +31,8 @@ async def test_yume_gpu_smoke_real_model(monkeypatch: pytest.MonkeyPatch) -> Non
     if not model_path.exists():
         pytest.skip(f"model directory does not exist: {model_path}")
 
-    monkeypatch.setenv("WM_ENGINE", "yume")
     monkeypatch.setenv("YUME_MODEL_DIR", str(model_path))
     monkeypatch.setenv("YUME_CHUNK_FRAMES", "2")
-    monkeypatch.setenv("WM_FRAME_WIDTH", "1280")
-    monkeypatch.setenv("WM_FRAME_HEIGHT", "704")
 
     config = YumeRuntimeConfig.from_env()
     engine = YumeEngine(config, logging.getLogger("tests.yume_gpu_smoke"))

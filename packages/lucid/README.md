@@ -1,16 +1,21 @@
 # Lucid
 
-Core runtime library for declaring realtime world models with:
+Single package for Lucid model authoring and runtime adapters.
+
+Core authoring API:
 
 - `LucidModel`
 - `LucidSession`
 - `@input`
-- `lucid.publish.*`
+- `publish.*`
 - `SessionContext`
 - manifest generation and input/output validation
-- `SessionRunner`
-- protocol, LiveKit, and coordinator glue
 
-Provider adapters and local dev servers live outside of this package.
+Subpackages:
+
+- `lucid.core`: model/session/spec/runtime internals
+- `lucid.livekit`: realtime runtime host and LiveKit transport
+- `lucid.controlplane`: worker lifecycle reporting clients
+- `lucid.modal`: Modal adapter and CLI
 
 The installable distribution name is `lucid-runtime`; model code imports `lucid`.

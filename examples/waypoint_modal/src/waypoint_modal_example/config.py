@@ -5,12 +5,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+WAYPOINT_FRAME_WIDTH = 640
+WAYPOINT_FRAME_HEIGHT = 360
+WAYPOINT_OUTPUT_FPS = 20
+
 
 class WaypointRuntimeConfig(BaseModel):
-    frame_width: int = Field(default=640, gt=0)
-    frame_height: int = Field(default=360, gt=0)
-    target_fps: int = Field(default=20, gt=0)
-    wm_engine: str = Field(default="waypoint", min_length=1)
     waypoint_model_source: str = Field(default="/models/Waypoint-1.1-Small", min_length=1)
     waypoint_ae_source: str = Field(
         default="/models/owl_vae_f16_c16_distill_v0_nogan",
@@ -27,10 +27,6 @@ class WaypointRuntimeConfig(BaseModel):
     def from_env(cls) -> "WaypointRuntimeConfig":
         raw_seed_image = os.getenv("WAYPOINT_SEED_IMAGE", "").strip()
         return cls(
-            frame_width=int(os.getenv("WM_FRAME_WIDTH", "640")),
-            frame_height=int(os.getenv("WM_FRAME_HEIGHT", "360")),
-            target_fps=int(os.getenv("WM_TARGET_FPS", "20")),
-            wm_engine=os.getenv("WM_ENGINE", "waypoint"),
             waypoint_model_source=os.getenv("WAYPOINT_MODEL_SOURCE", "/models/Waypoint-1.1-Small"),
             waypoint_ae_source=os.getenv(
                 "WAYPOINT_AE_SOURCE",

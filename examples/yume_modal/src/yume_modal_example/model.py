@@ -14,7 +14,12 @@ from lucid import (
     publish,
 )
 
-from .config import YumeRuntimeConfig
+from .config import (
+    YUME_FRAME_HEIGHT,
+    YUME_FRAME_WIDTH,
+    YUME_OUTPUT_FPS,
+    YumeRuntimeConfig,
+)
 from .engine import YumeEngine
 
 
@@ -23,7 +28,7 @@ class YumeSession(LucidSession["YumeLucidModel"]):
         super().__init__(model, ctx)
         self.prompt = model.config.yume_base_prompt
 
-    @input(description="Update the scene prompt used by Yume.")
+    @input(description="Update the scene prompt used by Yume.", paused=True)
     def set_prompt(
         self,
         prompt: Annotated[str, Field(..., min_length=1)],
@@ -32,7 +37,7 @@ class YumeSession(LucidSession["YumeLucidModel"]):
 
     async def run(self) -> None:
         engine = self.model.require_engine()
-        frame_interval_s = 1.0 / max(int(self.model.config.target_fps), 1)
+        frame_interval_s = 1.0 / YUME_OUTPUT_FPS
         await engine.start_session(self.prompt)
         last_prompt = self.prompt
         pending_chunk = None
@@ -81,10 +86,11 @@ class YumeSession(LucidSession["YumeLucidModel"]):
                 await self.ctx.publish("main_video", frame)
                 pending_chunk_published_frames += 1
                 pending_chunk_frame_index += 1
-                if pending_chunk_frame_index < len(pending_chunk.frames):
-                    await asyncio.sleep(frame_interval_s)
                 if self.ctx.is_paused():
                     pending_chunk_locked_by_pause = True
+                    continue
+                if pending_chunk_frame_index < len(pending_chunk.frames):
+                    await asyncio.sleep(frame_interval_s)
             if prompt_changed_during_publish and self.model.logger is not None:
                 self.model.logger.info(
                     "stopped yume chunk publish after prompt update published_frames=%s chunk_frames=%s",
@@ -103,18 +109,14 @@ class YumeSession(LucidSession["YumeLucidModel"]):
                 await asyncio.sleep(0)
                 continue
             if self.model.logger is not None:
-                output_metrics = self.ctx.output_metrics()
                 self.model.logger.info(
                     (
-                        "generated yume chunk chunk_ms=%.2f chunk_frames=%s "
-                        "effective_gen_fps=%.2f queue_depth=%s dropped_frames=%s"
+                        "generated yume chunk chunk_ms=%.2f chunk_frames=%s effective_gen_fps=%.2f"
                     ),
                     pending_chunk.chunk_ms,
                     pending_chunk_published_frames,
                     (pending_chunk_published_frames * 1000.0)
                     / max(pending_chunk.chunk_ms, 1e-6),
-                    int(output_metrics.get("queue_depth", 0)),
-                    int(output_metrics.get("dropped_frames", 0)),
                 )
             pending_chunk = None
             pending_chunk_frame_index = 0
@@ -132,12 +134,13 @@ class YumeLucidModel(LucidModel[YumeRuntimeConfig]):
     name = "yume"
     description = "Realtime Yume world model runtime"
     config_cls = YumeRuntimeConfig
+    session_cls = YumeSession
     outputs = (
         publish.video(
             name="main_video",
-            width=1280,
-            height=720,
-            fps=2,
+            width=YUME_FRAME_WIDTH,
+            height=YUME_FRAME_HEIGHT,
+            fps=YUME_OUTPUT_FPS,
             pixel_format="rgb24",
         ),
     )

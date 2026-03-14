@@ -41,10 +41,7 @@ class _StubEngine:
 
 def _runtime_config() -> YumeRuntimeConfig:
     return YumeRuntimeConfig(
-        frame_width=1280,
-        frame_height=720,
-        target_fps=100,
-        wm_engine="fake",
+        backend="fake",
         yume_model_dir=Path("/tmp/yume"),
         yume_chunk_frames=2,
         yume_base_prompt="old prompt",

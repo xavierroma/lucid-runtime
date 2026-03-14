@@ -6,7 +6,7 @@ from pathlib import Path
 
 import modal
 
-from lucid_modal import (
+from lucid.modal import (
     build_modal_volume_commit_hook,
     create_app,
     env_secret,
@@ -119,13 +119,7 @@ runtime_secret = env_secret(
     "HF_TOKEN",
     "CUDA_LAUNCH_BLOCKING",
     "TORCH_SHOW_CPP_STACKTRACES",
-    "WM_ENGINE",
-    "WM_LIVEKIT_MODE",
     "WM_STATUS_TOPIC",
-    "WM_FRAME_WIDTH",
-    "WM_FRAME_HEIGHT",
-    "WM_TARGET_FPS",
-    "WM_MAX_QUEUE_FRAMES",
 )
 
 

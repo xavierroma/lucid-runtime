@@ -9,8 +9,7 @@ description = "Example Waypoint model port using the Lucid runtime library"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "lucid-modal>=0.1,<0.2",
-  "lucid-runtime>=0.1,<0.2",
+  "lucid-runtime[modal]>=0.1,<0.2",
   "modal>=1.3.5",
   "numpy>=1.26,<3",
   "pillow>=10,<12",
@@ -51,5 +50,4 @@ waypoint_modal_example = ["configs/*.yaml"]
 package = true
 
 [tool.uv.sources]
-lucid-modal = { path = "../../packages/lucid-modal", editable = true }
 lucid-runtime = { path = "../../packages/lucid", editable = true }

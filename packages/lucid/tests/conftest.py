@@ -3,6 +3,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-EXAMPLE_SRC = Path(__file__).resolve().parents[3] / "examples" / "yume_modal" / "src"
-if str(EXAMPLE_SRC) not in sys.path:
-    sys.path.insert(0, str(EXAMPLE_SRC))
+ROOT = Path(__file__).resolve().parents[3]
+LUCID_PKG = ROOT / "packages" / "lucid"
+EXAMPLE_SRC = ROOT / "examples" / "yume_modal" / "src"
+
+for path in (LUCID_PKG, EXAMPLE_SRC):
+    resolved = str(path)
+    if resolved not in sys.path:
+        sys.path.insert(0, resolved)

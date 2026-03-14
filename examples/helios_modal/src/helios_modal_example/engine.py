@@ -10,7 +10,11 @@ from typing import Any
 
 import numpy as np
 
-from .config import HeliosRuntimeConfig
+from .config import (
+    HELIOS_VIDEO_HEIGHT,
+    HELIOS_VIDEO_WIDTH,
+    HeliosRuntimeConfig,
+)
 
 
 class HeliosEngineError(RuntimeError):
@@ -43,12 +47,7 @@ class HeliosEngine:
             self._logger.info("reusing preloaded helios engine")
             return
 
-        if self._config.wm_engine not in {"fake", "helios"}:
-            raise HeliosEngineError(
-                f"unsupported WM_ENGINE={self._config.wm_engine}; expected fake or helios"
-            )
-
-        if self._config.wm_engine == "fake":
+        if self._config.backend == "fake":
             self._loaded = True
             self._logger.info("starting helios in fake engine mode")
             return
@@ -74,7 +73,7 @@ class HeliosEngine:
         self._last_chunk = None
         self._chunk_index = 0
         self._generator = None
-        if self._config.wm_engine == "helios":
+        if self._config.backend == "real":
             import torch
 
             self._generator = torch.Generator(device="cuda").manual_seed(secrets.randbits(63))
@@ -91,7 +90,7 @@ class HeliosEngine:
             raise HeliosEngineError("engine must be loaded before generating chunks")
 
         started = time.perf_counter()
-        if self._config.wm_engine == "fake":
+        if self._config.backend == "fake":
             frames = self._generate_fake_chunk()
         else:
             frames = await asyncio.to_thread(self._generate_real_chunk_sync)
@@ -113,7 +112,7 @@ class HeliosEngine:
         from diffusers import AutoencoderKLWan, HeliosPyramidPipeline
 
         if not torch.cuda.is_available():
-            raise HeliosEngineError("CUDA is required for WM_ENGINE=helios")
+            raise HeliosEngineError("CUDA is required for Helios backend=real")
 
         torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -150,8 +149,8 @@ class HeliosEngine:
         call_kwargs: dict[str, Any] = {
             "prompt": self._prompt,
             "negative_prompt": self._config.helios_negative_prompt,
-            "height": int(self._config.frame_height),
-            "width": int(self._config.frame_width),
+            "height": HELIOS_VIDEO_HEIGHT,
+            "width": HELIOS_VIDEO_WIDTH,
             "num_frames": int(self._config.helios_chunk_frames),
             "guidance_scale": float(self._config.helios_guidance_scale),
             "pyramid_num_inference_steps_list": list(self._config.helios_pyramid_steps),
@@ -168,16 +167,16 @@ class HeliosEngine:
         output = pipeline(**call_kwargs)
         frames = _normalize_pipeline_frames(
             getattr(output, "frames", output),
-            expected_height=int(self._config.frame_height),
-            expected_width=int(self._config.frame_width),
+            expected_height=HELIOS_VIDEO_HEIGHT,
+            expected_width=HELIOS_VIDEO_WIDTH,
         )
         self._last_chunk = np.stack(frames, axis=0)
         self._chunk_index += 1
         return frames
 
     def _generate_fake_chunk(self) -> list[np.ndarray]:
-        height = int(self._config.frame_height)
-        width = int(self._config.frame_width)
+        height = HELIOS_VIDEO_HEIGHT
+        width = HELIOS_VIDEO_WIDTH
         chunk_frames = max(1, int(self._config.helios_chunk_frames))
         digest = hashlib.sha256(self._prompt.encode("utf-8")).digest()
         base = np.frombuffer(digest[:3], dtype=np.uint8).astype(np.uint16)

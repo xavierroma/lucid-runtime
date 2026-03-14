@@ -7,7 +7,7 @@ from pathlib import Path
 
 import modal
 
-from lucid_modal import create_app, env_secret, load_runtime_config_from_env, with_lucid_runtime
+from lucid.modal import create_app, env_secret, load_runtime_config_from_env, with_lucid_runtime
 
 from .config import YumeRuntimeConfig
 from .model import YumeLucidModel
@@ -88,13 +88,7 @@ runtime_secret = env_secret(
     "YUME_MODEL_DIR",
     "HF_HOME",
     "HF_TOKEN",
-    "WM_ENGINE",
-    "WM_LIVEKIT_MODE",
     "WM_STATUS_TOPIC",
-    "WM_FRAME_WIDTH",
-    "WM_FRAME_HEIGHT",
-    "WM_TARGET_FPS",
-    "WM_MAX_QUEUE_FRAMES",
     "YUME_CHUNK_FRAMES",
     "YUME_BASE_PROMPT",
 )
