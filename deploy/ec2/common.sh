@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 DEFAULT_ENV_FILE="${SCRIPT_DIR}/coordinator.env"
+DEFAULT_MODELS_FILE="${SCRIPT_DIR}/coordinator.models.json"
 DEFAULT_BUILD_PLATFORM="linux/amd64"
 DEFAULT_CONTAINER_NAME="lucid-coordinator"
 DEFAULT_HOST_PORT="8080"
@@ -36,6 +37,7 @@ Optional deployment settings:
 - EC2_SSH_PORT (default: 22)
 - EC2_SSH_KEY_PATH
 - EC2_REMOTE_DIR (default: \$HOME/lucid-runtime/deploy/ec2 over SSH, /home/\$EC2_USER/lucid-runtime/deploy/ec2 over SSM)
+- EC2_MODELS_FILE (default: ${DEFAULT_MODELS_FILE})
 - EC2_DOCKER_LOGIN_COMMAND
 - AWS_PROFILE (optional local AWS profile for automatic ECR login)
 - EC2_AWS_PROFILE (optional AWS profile on the EC2 host for automatic ECR login)
@@ -273,7 +275,6 @@ validate_coordinator_runtime_env() {
     WORKER_INTERNAL_TOKEN \
     LIVEKIT_API_KEY \
     LIVEKIT_API_SECRET \
-    MODAL_DISPATCH_BASE_URL \
-    MODAL_DISPATCH_TOKEN \
+    COORDINATOR_MODELS_FILE \
     COORDINATOR_CALLBACK_BASE_URL
 }

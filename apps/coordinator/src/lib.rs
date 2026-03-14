@@ -6,9 +6,10 @@ pub mod config;
 pub mod livekit_tokens;
 pub mod modal_dispatch;
 pub mod models;
+pub mod registry;
 pub mod state;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use axum::Router;
 use tokio::{
@@ -19,42 +20,65 @@ use tokio::{
 
 use config::Config;
 use modal_dispatch::{HttpModalDispatchClient, ModalDispatch};
+use registry::ModelBackend;
 use state::{ReconcileCommand, RuntimeState};
 
 #[derive(Clone)]
 pub struct AppContext {
     pub config: Config,
     pub runtime: Arc<RwLock<RuntimeState>>,
-    pub modal_dispatch: Arc<dyn ModalDispatch>,
+    pub modal_dispatch_by_model: Arc<HashMap<String, Arc<dyn ModalDispatch>>>,
 }
 
 impl AppContext {
     pub fn new(config: Config) -> Self {
         let runtime = RuntimeState::new();
-        let modal_dispatch = HttpModalDispatchClient::new(
-            config.modal_dispatch_base_url.clone(),
-            config.modal_dispatch_token.clone(),
-        );
+        let modal_dispatch_by_model = config
+            .model_registry
+            .models()
+            .iter()
+            .map(|model| {
+                let dispatch = match &model.backend {
+                    ModelBackend::Modal(backend) => Arc::new(HttpModalDispatchClient::new(
+                        backend.dispatch_base_url.clone(),
+                        backend.dispatch_token.clone(),
+                    ))
+                        as Arc<dyn ModalDispatch>,
+                };
+                (model.id.clone(), dispatch)
+            })
+            .collect::<HashMap<_, _>>();
         Self {
             config,
             runtime: Arc::new(RwLock::new(runtime)),
-            modal_dispatch: Arc::new(modal_dispatch),
+            modal_dispatch_by_model: Arc::new(modal_dispatch_by_model),
         }
     }
 
-    pub fn with_modal_dispatch(config: Config, modal_dispatch: Arc<dyn ModalDispatch>) -> Self {
+    pub fn with_modal_dispatchers(
+        config: Config,
+        modal_dispatch_by_model: HashMap<String, Arc<dyn ModalDispatch>>,
+    ) -> Self {
         let runtime = RuntimeState::new();
         Self {
             config,
             runtime: Arc::new(RwLock::new(runtime)),
-            modal_dispatch,
+            modal_dispatch_by_model: Arc::new(modal_dispatch_by_model),
         }
+    }
+
+    pub fn modal_dispatch_for_model(&self, model_name: &str) -> Arc<dyn ModalDispatch> {
+        self.modal_dispatch_by_model
+            .get(model_name)
+            .unwrap_or_else(|| panic!("missing dispatcher for configured model {model_name}"))
+            .clone()
     }
 }
 
 pub fn build_router(ctx: AppContext) -> Router {
     Router::new()
         .route("/healthz", axum::routing::get(api_public::healthz))
+        .route("/models", axum::routing::get(api_public::get_models))
         .route("/sessions", axum::routing::post(api_public::create_session))
         .route(
             "/sessions/:session_id",
@@ -95,7 +119,7 @@ pub async fn reconcile_runtime(ctx: &AppContext) {
 
     let mut status_queries = JoinSet::new();
     for snapshot in snapshots {
-        let modal_dispatch = ctx.modal_dispatch.clone();
+        let modal_dispatch = ctx.modal_dispatch_for_model(&snapshot.model_name);
         status_queries.spawn(async move {
             let modal_status = match modal_dispatch
                 .get_session_status(&snapshot.function_call_id)
@@ -122,15 +146,20 @@ pub async fn reconcile_runtime(ctx: &AppContext) {
         match result {
             Ok((snapshot, modal_status)) => {
                 let mut runtime = ctx.runtime.write().await;
+                let model = ctx
+                    .config
+                    .model_registry
+                    .get(&snapshot.model_name)
+                    .expect("session model should exist in registry");
                 commands.extend(runtime.reconcile_session(
                     &snapshot.session_id,
                     &snapshot.function_call_id,
                     modal_status,
                     now,
-                    ctx.config.session_startup_timeout,
-                    ctx.config.session_max_duration,
-                    ctx.config.session_cancel_grace,
-                    ctx.config.worker_heartbeat_timeout,
+                    Duration::from_secs(model.timeouts.startup_timeout_secs),
+                    Duration::from_secs(model.timeouts.session_max_duration_secs),
+                    Duration::from_secs(model.timeouts.session_cancel_grace_secs),
+                    Duration::from_secs(model.timeouts.worker_heartbeat_timeout_secs),
                 ));
             }
             Err(err) => {
@@ -156,10 +185,11 @@ async fn execute_reconcile_commands(ctx: &AppContext, commands: Vec<ReconcileCom
         match command {
             ReconcileCommand::CancelModal {
                 session_id,
+                model_name,
                 function_call_id,
                 force,
             } => match ctx
-                .modal_dispatch
+                .modal_dispatch_for_model(&model_name)
                 .cancel_session(&function_call_id, force)
                 .await
             {
@@ -171,6 +201,7 @@ async fn execute_reconcile_commands(ctx: &AppContext, commands: Vec<ReconcileCom
                     tracing::warn!(
                         error = %err,
                         session_id = %session_id,
+                        model_name = %model_name,
                         function_call_id = %function_call_id,
                         force,
                         "failed to dispatch modal cancel during reconciliation"
@@ -214,9 +245,12 @@ mod tests {
         modal_dispatch::{
             LaunchSessionRequest, ModalDispatch, ModalDispatchError, ModalExecutionStatus,
         },
-        models::{SessionEndReason, SessionResponse, SessionState},
+        models::{ModelsResponse, SessionEndReason, SessionResponse, SessionState},
         reconcile_runtime, AppContext,
     };
+
+    const DEFAULT_TEST_MODEL: &str = "yume";
+    const HELIOS_TEST_MODEL: &str = "helios";
 
     struct StatusProbe {
         expected_started: usize,
@@ -363,9 +397,44 @@ mod tests {
         }
     }
 
+    fn dispatchers_for_registry(
+        config: &Config,
+        default_dispatch: Arc<FakeModalDispatch>,
+        overrides: &[(&str, Arc<FakeModalDispatch>)],
+    ) -> HashMap<String, Arc<dyn ModalDispatch>> {
+        config
+            .model_registry
+            .models()
+            .iter()
+            .map(|model| {
+                let dispatch = overrides
+                    .iter()
+                    .find(|(id, _)| *id == model.id)
+                    .map(|(_, dispatch)| dispatch.clone())
+                    .unwrap_or_else(|| default_dispatch.clone());
+                (model.id.clone(), dispatch as Arc<dyn ModalDispatch>)
+            })
+            .collect()
+    }
+
     fn test_app(fake_dispatch: Arc<FakeModalDispatch>) -> (Router, Config) {
         let config = Config::for_tests();
-        let ctx = AppContext::with_modal_dispatch(config.clone(), fake_dispatch);
+        let ctx = AppContext::with_modal_dispatchers(
+            config.clone(),
+            dispatchers_for_registry(&config, fake_dispatch, &[]),
+        );
+        (build_router(ctx), config)
+    }
+
+    fn test_app_with_overrides(
+        default_dispatch: Arc<FakeModalDispatch>,
+        overrides: &[(&str, Arc<FakeModalDispatch>)],
+    ) -> (Router, Config) {
+        let config = Config::for_tests();
+        let ctx = AppContext::with_modal_dispatchers(
+            config.clone(),
+            dispatchers_for_registry(&config, default_dispatch, overrides),
+        );
         (build_router(ctx), config)
     }
 
@@ -379,21 +448,19 @@ mod tests {
     async fn create_session(
         app: &Router,
         config: &Config,
-        model_name: Option<&str>,
+        model_name: &str,
     ) -> (StatusCode, SessionResponse) {
-        let mut request = Request::builder()
-            .method(Method::POST)
-            .uri("/sessions")
-            .header(AUTHORIZATION, format!("Bearer {}", config.api_key));
-        let body = if let Some(model_name) = model_name {
-            request = request.header(CONTENT_TYPE, "application/json");
-            Body::from(json!({ "model_name": model_name }).to_string())
-        } else {
-            Body::empty()
-        };
         let response = app
             .clone()
-            .oneshot(request.body(body).expect("request should build"))
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/sessions")
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({ "model_name": model_name }).to_string()))
+                    .expect("request should build"),
+            )
             .await
             .expect("request should succeed");
 
@@ -403,6 +470,29 @@ mod tests {
             .expect("response body should be readable");
         let payload = serde_json::from_slice::<SessionResponse>(&body)
             .expect("create session body should decode");
+        (status, payload)
+    }
+
+    async fn get_models(app: &Router, config: &Config) -> (StatusCode, ModelsResponse) {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/models")
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let payload =
+            serde_json::from_slice::<ModelsResponse>(&body).expect("get models body should decode");
         (status, payload)
     }
 
@@ -426,17 +516,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_models_returns_registry_order() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, config) = test_app(fake_dispatch);
+
+        let (status, payload) = get_models(&app, &config).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            payload
+                .models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["yume", "waypoint", "helios"]
+        );
+        assert_eq!(payload.models[2].display_name, "Helios (Distilled)");
+    }
+
+    #[tokio::test]
     async fn create_session_allows_multiple_inflight_sessions() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1", "call-2"]));
         let (app, config) = test_app(fake_dispatch.clone());
 
-        let (first_status, first) = create_session(&app, &config, None).await;
-        let (second_status, second) = create_session(&app, &config, None).await;
+        let (first_status, first) = create_session(&app, &config, DEFAULT_TEST_MODEL).await;
+        let (second_status, second) = create_session(&app, &config, DEFAULT_TEST_MODEL).await;
 
         assert_eq!(first_status, StatusCode::ACCEPTED);
         assert_eq!(second_status, StatusCode::ACCEPTED);
         assert_eq!(first.session.state, SessionState::Starting);
         assert_eq!(second.session.state, SessionState::Starting);
+        assert_eq!(first.session.model_name, DEFAULT_TEST_MODEL);
+        assert_eq!(second.session.model_name, DEFAULT_TEST_MODEL);
         assert!(first.client_access_token.is_some());
         assert!(second.client_access_token.is_some());
         assert!(first
@@ -445,7 +556,7 @@ mod tests {
             .starts_with(&format!("wm-{}", first.session.session_id)));
         assert_eq!(
             first.capabilities.manifest["model"]["name"],
-            Value::String(config.model_name.clone())
+            Value::String(DEFAULT_TEST_MODEL.to_string())
         );
         assert_ne!(first.session.session_id, second.session.session_id);
         assert_eq!(fake_dispatch.launched_count(), 2);
@@ -480,7 +591,10 @@ mod tests {
                     .method(Method::POST)
                     .uri("/sessions")
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
-                    .body(Body::empty())
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({ "model_name": DEFAULT_TEST_MODEL }).to_string(),
+                    ))
                     .expect("request should build"),
             )
             .await
@@ -490,7 +604,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_session_rejects_mismatched_requested_model() {
+    async fn create_session_requires_model_name() {
+        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
+        let (app, config) = test_app(fake_dispatch.clone());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/sessions")
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(fake_dispatch.launched_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn create_session_rejects_unknown_model() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
         let (app, config) = test_app(fake_dispatch.clone());
 
@@ -502,21 +638,47 @@ mod tests {
                     .uri("/sessions")
                     .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
                     .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(json!({ "model_name": "waypoint" }).to_string()))
+                    .body(Body::from(json!({ "model_name": "missing" }).to_string()))
                     .expect("request should build"),
             )
             .await
             .expect("request should succeed");
 
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(fake_dispatch.launched_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn create_session_routes_models_to_their_configured_dispatchers() {
+        let default_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-yume"]));
+        let helios_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-helios"]));
+        let (app, config) = test_app_with_overrides(
+            default_dispatch.clone(),
+            &[(HELIOS_TEST_MODEL, helios_dispatch.clone())],
+        );
+
+        let (_, yume) = create_session(&app, &config, DEFAULT_TEST_MODEL).await;
+        let (_, helios) = create_session(&app, &config, HELIOS_TEST_MODEL).await;
+
+        assert_eq!(default_dispatch.launched_count(), 1);
+        assert_eq!(helios_dispatch.launched_count(), 1);
+        assert_eq!(yume.session.model_name, DEFAULT_TEST_MODEL);
+        assert_eq!(helios.session.model_name, HELIOS_TEST_MODEL);
+        assert_eq!(
+            yume.capabilities.manifest["model"]["name"],
+            Value::String(DEFAULT_TEST_MODEL.to_string())
+        );
+        assert_eq!(
+            helios.capabilities.manifest["model"]["name"],
+            Value::String(HELIOS_TEST_MODEL.to_string())
+        );
     }
 
     #[tokio::test]
     async fn get_session_returns_found_and_not_found() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
         let (app, config) = test_app(fake_dispatch);
-        let (_, created) = create_session(&app, &config, None).await;
+        let (_, created) = create_session(&app, &config, DEFAULT_TEST_MODEL).await;
 
         let found = app
             .clone()
@@ -551,8 +713,8 @@ mod tests {
     async fn end_session_is_idempotent_and_best_effort_cancels_modal_job() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1", "call-2"]));
         let (app, config) = test_app(fake_dispatch.clone());
-        let (_, created) = create_session(&app, &config, None).await;
-        let (_, other) = create_session(&app, &config, None).await;
+        let (_, created) = create_session(&app, &config, DEFAULT_TEST_MODEL).await;
+        let (_, other) = create_session(&app, &config, DEFAULT_TEST_MODEL).await;
 
         let first_end = app
             .clone()
@@ -617,19 +779,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn end_session_uses_the_session_model_dispatcher() {
+        let default_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-yume"]));
+        let helios_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-helios"]));
+        let (app, config) = test_app_with_overrides(
+            default_dispatch.clone(),
+            &[(HELIOS_TEST_MODEL, helios_dispatch.clone())],
+        );
+        let (_, helios) = create_session(&app, &config, HELIOS_TEST_MODEL).await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/sessions/{}:end", helios.session.session_id))
+                    .header(AUTHORIZATION, format!("Bearer {}", config.api_key))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(default_dispatch.canceled_count(), 0);
+        assert_eq!(helios_dispatch.canceled_count(), 1);
+    }
+
+    #[tokio::test]
     async fn reconcile_runtime_handles_multiple_sessions_independently() {
-        let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&[]));
-        fake_dispatch.set_status_for("call-1", ModalExecutionStatus::Failure);
-        fake_dispatch.set_status_for("call-2", ModalExecutionStatus::Pending);
+        let default_dispatch = Arc::new(FakeModalDispatch::with_ids(&[]));
+        let helios_dispatch = Arc::new(FakeModalDispatch::with_ids(&[]));
+        default_dispatch.set_status_for("call-1", ModalExecutionStatus::Failure);
+        helios_dispatch.set_status_for("call-2", ModalExecutionStatus::Pending);
         let config = Config::for_tests();
-        let ctx = AppContext::with_modal_dispatch(config, fake_dispatch);
+        let ctx = AppContext::with_modal_dispatchers(
+            config.clone(),
+            dispatchers_for_registry(
+                &config,
+                default_dispatch,
+                &[(HELIOS_TEST_MODEL, helios_dispatch)],
+            ),
+        );
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
 
         {
             let mut runtime = ctx.runtime.write().await;
-            runtime.create_session(first, "call-1".to_string(), Instant::now());
-            runtime.create_session(second, "call-2".to_string(), Instant::now());
+            runtime.create_session(
+                first,
+                DEFAULT_TEST_MODEL.to_string(),
+                "call-1".to_string(),
+                Instant::now(),
+            );
+            runtime.create_session(
+                second,
+                HELIOS_TEST_MODEL.to_string(),
+                "call-2".to_string(),
+                Instant::now(),
+            );
         }
 
         reconcile_runtime(&ctx).await;
@@ -655,12 +863,25 @@ mod tests {
         let (dispatch, probe) = FakeModalDispatch::with_ids_and_status_probe(&[], 2);
         let fake_dispatch = Arc::new(dispatch);
         let config = Config::for_tests();
-        let ctx = AppContext::with_modal_dispatch(config, fake_dispatch);
+        let ctx = AppContext::with_modal_dispatchers(
+            config.clone(),
+            dispatchers_for_registry(&config, fake_dispatch, &[]),
+        );
 
         {
             let mut runtime = ctx.runtime.write().await;
-            runtime.create_session(Uuid::new_v4(), "call-1".to_string(), Instant::now());
-            runtime.create_session(Uuid::new_v4(), "call-2".to_string(), Instant::now());
+            runtime.create_session(
+                Uuid::new_v4(),
+                DEFAULT_TEST_MODEL.to_string(),
+                "call-1".to_string(),
+                Instant::now(),
+            );
+            runtime.create_session(
+                Uuid::new_v4(),
+                HELIOS_TEST_MODEL.to_string(),
+                "call-2".to_string(),
+                Instant::now(),
+            );
         }
 
         let reconcile_task = tokio::spawn({
@@ -688,7 +909,7 @@ mod tests {
     async fn internal_callbacks_transition_to_ready_paused_running_and_ended() {
         let fake_dispatch = Arc::new(FakeModalDispatch::with_ids(&["call-1"]));
         let (app, config) = test_app(fake_dispatch);
-        let (_, created) = create_session(&app, &config, None).await;
+        let (_, created) = create_session(&app, &config, DEFAULT_TEST_MODEL).await;
 
         let ready = app
             .clone()

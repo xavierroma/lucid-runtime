@@ -46,6 +46,7 @@ pub enum SessionEndReason {
 pub struct Session {
     pub session_id: Uuid,
     pub room_name: String,
+    pub model_name: String,
     pub state: SessionState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
@@ -77,6 +78,19 @@ pub struct SessionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_access_token: Option<String>,
     pub capabilities: Capabilities,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SupportedModel {
+    pub id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelsResponse {
+    pub models: Vec<SupportedModel>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1,62 +1,17 @@
-use std::sync::OnceLock;
+use std::{fs, path::Path};
 
 use serde_json::Value;
 
 use crate::models::{Capabilities, OutputBinding, CONTROL_TOPIC, STATUS_TOPIC};
 
-static YUME_MANIFEST: OnceLock<Value> = OnceLock::new();
-static WAYPOINT_MANIFEST: OnceLock<Value> = OnceLock::new();
-static HELIOS_MANIFEST: OnceLock<Value> = OnceLock::new();
-
-fn parse_manifest(path: &str) -> Value {
-    serde_json::from_str(path).expect("embedded lucid manifest should be valid JSON")
+pub fn load_manifest_from_path(path: &Path) -> Result<Value, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|err| format!("failed reading manifest {}: {err}", path.display()))?;
+    serde_json::from_str(&raw)
+        .map_err(|err| format!("invalid manifest JSON {}: {err}", path.display()))
 }
 
-pub fn manifest(model_name: &str) -> Value {
-    match model_name {
-        "helios" => HELIOS_MANIFEST
-            .get_or_init(|| {
-                parse_manifest(include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../packages/contracts/generated/lucid_manifest.helios.json"
-                )))
-            })
-            .clone(),
-        "waypoint" => WAYPOINT_MANIFEST
-            .get_or_init(|| {
-                parse_manifest(include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../packages/contracts/generated/lucid_manifest.waypoint.json"
-                )))
-            })
-            .clone(),
-        "yume" => YUME_MANIFEST
-            .get_or_init(|| {
-                parse_manifest(include_str!(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../packages/contracts/generated/lucid_manifest.json"
-                )))
-            })
-            .clone(),
-        other => {
-            tracing::warn!(
-                model_name = other,
-                "unknown coordinator model; falling back to yume"
-            );
-            YUME_MANIFEST
-                .get_or_init(|| {
-                    parse_manifest(include_str!(concat!(
-                        env!("CARGO_MANIFEST_DIR"),
-                        "/../../packages/contracts/generated/lucid_manifest.json"
-                    )))
-                })
-                .clone()
-        }
-    }
-}
-
-pub fn build_capabilities(model_name: &str) -> Capabilities {
-    let manifest = manifest(model_name);
+pub fn build_capabilities(manifest: &Value) -> Capabilities {
     let output_bindings = manifest
         .get("outputs")
         .and_then(Value::as_array)
@@ -86,34 +41,35 @@ pub fn build_capabilities(model_name: &str) -> Capabilities {
     Capabilities {
         control_topic: CONTROL_TOPIC.to_string(),
         status_topic: STATUS_TOPIC.to_string(),
-        manifest,
+        manifest: manifest.clone(),
         output_bindings,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
-    use super::{build_capabilities, manifest};
-
-    #[test]
-    fn helios_manifest_is_embedded() {
-        assert_eq!(
-            manifest("helios")["model"]["name"],
-            Value::String("helios".to_string())
-        );
-    }
+    use super::build_capabilities;
 
     #[test]
-    fn helios_capabilities_include_video_track_binding() {
-        let capabilities = build_capabilities("helios");
+    fn capabilities_include_track_binding_for_video_outputs() {
+        let capabilities = build_capabilities(&json!({
+            "model": {"name": "helios"},
+            "outputs": [
+                {"name": "main_video", "kind": "video"}
+            ]
+        }));
+
         assert_eq!(
             capabilities.manifest["model"]["name"],
             Value::String("helios".to_string())
         );
         assert_eq!(capabilities.output_bindings.len(), 1);
         assert_eq!(capabilities.output_bindings[0].name, "main_video");
-        assert_eq!(capabilities.output_bindings[0].track_name.as_deref(), Some("main_video"));
+        assert_eq!(
+            capabilities.output_bindings[0].track_name.as_deref(),
+            Some("main_video")
+        );
     }
 }
