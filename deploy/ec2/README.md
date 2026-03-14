@@ -40,12 +40,13 @@ docker version
 For the default SSM-first deploy flow, the instance should also be managed by AWS Systems Manager
 (SSM). Amazon Linux instances with an attached instance profile commonly already meet that bar.
 
-## 3) Configure one env file on your workstation
+## 3) Configure the runtime files on your workstation
 
-Copy [coordinator.env.example](/Users/xavierroma/projects/lucid-runtime/deploy/ec2/coordinator.env.example) to `deploy/ec2/coordinator.env`, then fill in:
+Copy [coordinator.env.example](/Users/xavierroma/projects/lucid-runtime/deploy/ec2/coordinator.env.example) to `deploy/ec2/coordinator.env`, and copy [coordinator.models.example.json](/Users/xavierroma/projects/lucid-runtime/deploy/ec2/coordinator.models.example.json) to `deploy/ec2/coordinator.models.json`:
 
 ```bash
 cp deploy/ec2/coordinator.env.example deploy/ec2/coordinator.env
+cp deploy/ec2/coordinator.models.example.json deploy/ec2/coordinator.models.json
 ```
 
 Coordinator runtime settings:
@@ -54,14 +55,18 @@ Coordinator runtime settings:
 - `WORKER_INTERNAL_TOKEN`: bearer token used by Modal session callbacks to hit `/internal/...`
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
-- `WM_MODEL_NAME`: `yume` or `waypoint`; this must match the Modal worker you deployed
-- `MODAL_DISPATCH_BASE_URL`: Modal `dispatch_api` base URL
-- `MODAL_DISPATCH_TOKEN`: same token configured for the Modal app
 - `COORDINATOR_CALLBACK_BASE_URL`: public URL Modal can call back to
+- `COORDINATOR_MODELS_FILE`: in-container path for the mounted registry file; the example uses `/app/config/coordinator.models.json`
 
-For Waypoint, also raise `SESSION_STARTUP_TIMEOUT_SECS` well above the coordinator default.
-`900` seconds is a practical starting point for first cold boots because the worker may spend
-several minutes loading weights and autotuning kernels.
+Per-model worker targets live in `deploy/ec2/coordinator.models.json`. Each entry carries:
+
+- the model id and display name exposed by `GET /models`
+- the manifest path inside the coordinator container
+- the Modal `dispatch_api` base URL, token, and worker id
+- the model-specific timeout values
+
+The example file includes `yume`, `waypoint`, and `helios`. For Waypoint and Helios, the example
+uses a `900` second startup timeout because cold boots can take several minutes.
 
 For a raw EC2 public endpoint on port `8080`, use:
 
@@ -84,6 +89,7 @@ Deployment settings used by `deploy/ec2/deploy.sh`:
 - `EC2_SSH_PORT` (optional, default `22`)
 - `EC2_SSH_KEY_PATH` (optional)
 - `EC2_REMOTE_DIR` (optional, default `$HOME/lucid-runtime/deploy/ec2` over SSH or `/home/<EC2_USER>/lucid-runtime/deploy/ec2` over SSM)
+- `EC2_MODELS_FILE` (optional, default `deploy/ec2/coordinator.models.json`)
 - `AWS_PROFILE` (optional): local AWS profile used for automatic ECR login before the image push
 - `EC2_DOCKER_LOGIN_COMMAND` (optional): shell command run on the instance before `docker pull`; useful for private registries
 - `EC2_AWS_PROFILE` (optional): AWS profile on the instance for automatic ECR login if you are not using an instance role/default credentials
@@ -104,7 +110,7 @@ The deploy script:
 
 - builds the coordinator image for Linux x86_64 with `docker buildx`
 - pushes it to `COORDINATOR_IMAGE_REPOSITORY`
-- materializes `coordinator.env` and `run-coordinator.sh` on the EC2 host during deployment
+- materializes `coordinator.env`, `coordinator.models.json`, and `run-coordinator.sh` on the EC2 host during deployment
 - prefers SSM for managed instances and falls back to SSH otherwise
 - logs into ECR locally when the image repo is ECR
 - runs `EC2_DOCKER_LOGIN_COMMAND` on the instance, or auto-generates the ECR login command when the image repo is ECR
@@ -144,6 +150,7 @@ curl http://<ec2-public-dns>:8080/healthz
 
 If that works, the coordinator is reachable for:
 
+- `GET /models`
 - `POST /sessions`
 - `GET /sessions/{session_id}`
 - `POST /sessions/{session_id}:end`
@@ -154,7 +161,9 @@ If that works, the coordinator is reachable for:
 
 ```bash
 curl -X POST http://<ec2-public-dns>:8080/sessions \
-  -H "Authorization: Bearer <API_KEY>"
+  -H "Authorization: Bearer <API_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"model_name":"helios"}'
 ```
 
 Expected: `202 Accepted` with a session id and client access token.
@@ -164,9 +173,9 @@ Expected: `202 Accepted` with a session id and client access token.
 If you point the demo app at this coordinator, line these up:
 
 - coordinator `API_KEY` == demo `COORDINATOR_API_KEY` for local proxy mode or `VITE_COORDINATOR_API_KEY` for direct mode
-- coordinator `WM_MODEL_NAME` == demo `VITE_DEFAULT_MODEL`
+- demo `VITE_DEFAULT_MODEL` should match one of the ids present in `GET /models`; otherwise the demo falls back to the first model in the registry
 - coordinator `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` must belong to the same LiveKit project as the demo `VITE_LIVEKIT_URL`
-- coordinator `MODAL_DISPATCH_TOKEN` == Modal worker `MODAL_DISPATCH_TOKEN`
+- each registry entry `dispatch_token` must match that model worker's `MODAL_DISPATCH_TOKEN`
 
 ## Notes
 

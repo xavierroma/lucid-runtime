@@ -75,12 +75,14 @@ pub enum EndRequestError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EndRequestResult {
+    pub model_name: String,
     pub function_call_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSnapshot {
     pub session_id: Uuid,
+    pub model_name: String,
     pub function_call_id: String,
 }
 
@@ -88,6 +90,7 @@ pub struct SessionSnapshot {
 pub enum ReconcileCommand {
     CancelModal {
         session_id: Uuid,
+        model_name: String,
         function_call_id: String,
         force: bool,
     },
@@ -107,12 +110,14 @@ impl RuntimeState {
     pub fn create_session(
         &mut self,
         session_id: Uuid,
+        model_name: String,
         modal_function_call_id: String,
         now: Instant,
     ) -> Session {
         let session = Session {
             session_id,
             room_name: Self::room_name_for(session_id),
+            model_name,
             state: SessionState::Starting,
             error_code: None,
             end_reason: None,
@@ -151,6 +156,7 @@ impl RuntimeState {
                 }
                 Some(SessionSnapshot {
                     session_id: *session_id,
+                    model_name: record.session.model_name.clone(),
                     function_call_id: record.modal_function_call_id.clone(),
                 })
             })
@@ -169,6 +175,7 @@ impl RuntimeState {
         };
         if record.session.state.is_terminal() || record.session.state == SessionState::Canceling {
             return Ok(EndRequestResult {
+                model_name: record.session.model_name.clone(),
                 function_call_id: None,
             });
         }
@@ -179,6 +186,7 @@ impl RuntimeState {
             PendingTerminalDisposition::ended(SessionEndReason::ClientRequested),
         );
         Ok(EndRequestResult {
+            model_name: record.session.model_name.clone(),
             function_call_id: Some(record.modal_function_call_id.clone()),
         })
     }
@@ -467,6 +475,7 @@ impl RuntimeState {
         if record.cancel_dispatched_at.is_none() {
             return vec![ReconcileCommand::CancelModal {
                 session_id: *session_id,
+                model_name: record.session.model_name.clone(),
                 function_call_id: record.modal_function_call_id.clone(),
                 force: false,
             }];
@@ -480,6 +489,7 @@ impl RuntimeState {
         {
             return vec![ReconcileCommand::CancelModal {
                 session_id: *session_id,
+                model_name: record.session.model_name.clone(),
                 function_call_id: record.modal_function_call_id.clone(),
                 force: true,
             }];
@@ -562,7 +572,12 @@ mod tests {
     async fn startup_timeout_enters_canceling_and_uses_timeout_failure_on_termination() {
         let mut state = RuntimeState::new();
         let session_id = Uuid::new_v4();
-        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state.create_session(
+            session_id,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
 
         advance(Duration::from_secs(121)).await;
         let commands = state.reconcile_session(
@@ -580,6 +595,7 @@ mod tests {
             commands,
             vec![ReconcileCommand::CancelModal {
                 session_id,
+                model_name: "yume".to_string(),
                 function_call_id: "call-1".to_string(),
                 force: false,
             }]
@@ -615,7 +631,12 @@ mod tests {
     async fn ready_session_times_out_before_model_start() {
         let mut state = RuntimeState::new();
         let session_id = Uuid::new_v4();
-        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state.create_session(
+            session_id,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
         state
             .mark_ready(&session_id, Instant::now())
             .expect("ready transition should succeed");
@@ -636,6 +657,7 @@ mod tests {
             commands,
             vec![ReconcileCommand::CancelModal {
                 session_id,
+                model_name: "yume".to_string(),
                 function_call_id: "call-1".to_string(),
                 force: false,
             }]
@@ -652,8 +674,18 @@ mod tests {
         let mut state = RuntimeState::new();
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
-        state.create_session(first, "call-1".to_string(), Instant::now());
-        state.create_session(second, "call-2".to_string(), Instant::now());
+        state.create_session(
+            first,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
+        state.create_session(
+            second,
+            "waypoint".to_string(),
+            "call-2".to_string(),
+            Instant::now(),
+        );
 
         assert_eq!(state.mark_ready(&first, Instant::now()), Ok(()));
         assert_eq!(state.mark_running(&first, Instant::now()), Ok(()));
@@ -674,8 +706,18 @@ mod tests {
         let mut state = RuntimeState::new();
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
-        state.create_session(first, "call-1".to_string(), Instant::now());
-        state.create_session(second, "call-2".to_string(), Instant::now());
+        state.create_session(
+            first,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
+        state.create_session(
+            second,
+            "waypoint".to_string(),
+            "call-2".to_string(),
+            Instant::now(),
+        );
 
         advance(Duration::from_secs(121)).await;
         let commands = state.reconcile_session(
@@ -693,6 +735,7 @@ mod tests {
             commands,
             vec![ReconcileCommand::CancelModal {
                 session_id: first,
+                model_name: "yume".to_string(),
                 function_call_id: "call-1".to_string(),
                 force: false,
             }]
@@ -718,14 +761,25 @@ mod tests {
         let mut state = RuntimeState::new();
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
-        state.create_session(first, "call-1".to_string(), Instant::now());
-        state.create_session(second, "call-2".to_string(), Instant::now());
+        state.create_session(
+            first,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
+        state.create_session(
+            second,
+            "waypoint".to_string(),
+            "call-2".to_string(),
+            Instant::now(),
+        );
         assert!(state.mark_ended(&first, None, None));
 
         assert_eq!(
             state.non_terminal_session_snapshots(),
             vec![SessionSnapshot {
                 session_id: second,
+                model_name: "waypoint".to_string(),
                 function_call_id: "call-2".to_string(),
             }]
         );
@@ -735,7 +789,12 @@ mod tests {
     fn ready_must_precede_running() {
         let mut state = RuntimeState::new();
         let session_id = Uuid::new_v4();
-        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state.create_session(
+            session_id,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
 
         assert_eq!(
             state.mark_running(&session_id, Instant::now()),
@@ -754,7 +813,12 @@ mod tests {
     fn running_session_can_pause_and_resume() {
         let mut state = RuntimeState::new();
         let session_id = Uuid::new_v4();
-        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state.create_session(
+            session_id,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
 
         assert_eq!(state.mark_ready(&session_id, Instant::now()), Ok(()));
         assert_eq!(state.mark_running(&session_id, Instant::now()), Ok(()));
@@ -771,7 +835,12 @@ mod tests {
     fn pause_requires_running_state() {
         let mut state = RuntimeState::new();
         let session_id = Uuid::new_v4();
-        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state.create_session(
+            session_id,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
 
         assert_eq!(
             state.mark_paused(&session_id, Instant::now()),
@@ -788,7 +857,12 @@ mod tests {
     async fn paused_session_times_out_after_max_duration() {
         let mut state = RuntimeState::new();
         let session_id = Uuid::new_v4();
-        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state.create_session(
+            session_id,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
         state
             .mark_ready(&session_id, Instant::now())
             .expect("ready transition should succeed");
@@ -815,6 +889,7 @@ mod tests {
             commands,
             vec![ReconcileCommand::CancelModal {
                 session_id,
+                model_name: "yume".to_string(),
                 function_call_id: "call-1".to_string(),
                 force: false,
             }]
@@ -830,7 +905,12 @@ mod tests {
     async fn paused_session_times_out_when_heartbeat_stops() {
         let mut state = RuntimeState::new();
         let session_id = Uuid::new_v4();
-        state.create_session(session_id, "call-1".to_string(), Instant::now());
+        state.create_session(
+            session_id,
+            "yume".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
         state
             .mark_ready(&session_id, Instant::now())
             .expect("ready transition should succeed");
@@ -857,6 +937,7 @@ mod tests {
             commands,
             vec![ReconcileCommand::CancelModal {
                 session_id,
+                model_name: "yume".to_string(),
                 function_call_id: "call-1".to_string(),
                 force: false,
             }]

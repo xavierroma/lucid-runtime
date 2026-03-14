@@ -11,11 +11,34 @@ paths:
       responses:
         '200':
           description: Healthy
+  /models:
+    get:
+      summary: List supported models
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Supported models in registry order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
   /sessions:
     post:
       summary: Create a session (async dispatch)
       security:
         - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - model_name
+              properties:
+                model_name:
+                  type: string
       responses:
         '202':
           description: Session accepted and dispatched
@@ -23,8 +46,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SessionResponse'
-        '409':
-          description: Requested model does not match the deployed coordinator model
+        '400':
+          description: Missing or unsupported model
   /sessions/{session_id}:
     get:
       summary: Get session state
@@ -76,6 +99,7 @@ components:
       required:
         - session_id
         - room_name
+        - model_name
         - state
       properties:
         session_id:
@@ -83,15 +107,39 @@ components:
           format: uuid
         room_name:
           type: string
+        model_name:
+          type: string
         state:
           type: string
-          enum: [STARTING, READY, RUNNING, CANCELING, ENDED, FAILED]
+          enum: [STARTING, READY, RUNNING, PAUSED, CANCELING, ENDED, FAILED]
         error_code:
           type: string
           nullable: true
         end_reason:
           type: string
           nullable: true
+    SupportedModel:
+      type: object
+      required:
+        - id
+        - display_name
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+        description:
+          type: string
+          nullable: true
+    ModelsResponse:
+      type: object
+      required:
+        - models
+      properties:
+        models:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupportedModel'
     OutputBinding:
       type: object
       required:

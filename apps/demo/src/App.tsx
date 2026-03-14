@@ -16,9 +16,11 @@ import {
 import {
   createSession,
   endSession,
+  getModels,
   getSession,
   isTerminalSessionState,
   type Capabilities,
+  type SupportedModel,
   type SessionResponse,
 } from "@/lib/coordinator"
 import { demoEnv, getMissingConfig } from "@/lib/env"
@@ -31,7 +33,6 @@ import {
   type SavedEnvironment,
 } from "@/lib/environments"
 
-type DemoModelName = "yume" | "waypoint" | "helios"
 type DisplayTone = "off" | "warm" | "live" | "fault"
 type AppRoute = "/" | "/environments"
 
@@ -43,43 +44,38 @@ interface DisplayStatus {
 
 const ENVIRONMENT_ROUTE: AppRoute = "/environments"
 
-const MODEL_OPTIONS: Array<{
-  name: DemoModelName
-  label: string
-  fullLabel: string
-}> = [
-    {
-      name: "yume",
-      label: "Yume",
-      fullLabel: "Yume-1.5",
-    },
-    {
-      name: "waypoint",
-      label: "Waypoint",
-      fullLabel: "Waypoint-1.1-Small",
-    },
-    {
-      name: "helios",
-      label: "Helios",
-      fullLabel: "Helios-Distilled",
-    },
-  ]
-
 function hasPromptInput(capabilities: Capabilities | null) {
   return Boolean(
     capabilities?.manifest.inputs.find((input) => input.name === "set_prompt"),
   )
 }
 
-function normalizeModelName(value: string | null | undefined): DemoModelName | null {
-  if (value === "yume" || value === "waypoint" || value === "helios") {
-    return value
-  }
-  return null
+function normalizeModelId(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase()
+  return normalized ? normalized : null
 }
 
-function modelLabel(modelName: DemoModelName) {
-  return MODEL_OPTIONS.find((option) => option.name === modelName)?.label ?? modelName
+function selectPreferredModel(models: SupportedModel[], preferredModel: string, current: string | null) {
+  if (current && models.some((model) => model.id === current)) {
+    return current
+  }
+
+  const preferred = normalizeModelId(preferredModel)
+  if (preferred && models.some((model) => model.id === preferred)) {
+    return preferred
+  }
+
+  return models[0]?.id ?? null
+}
+
+function modelLabel(modelName: string | null, models: SupportedModel[]) {
+  if (!modelName) {
+    return "session"
+  }
+
+  return (
+    models.find((model) => model.id === modelName)?.display_name ?? modelName
+  )
 }
 
 function normalizeRoute(pathname: string): AppRoute {
@@ -94,7 +90,8 @@ function sortEnvironments(environments: SavedEnvironment[]) {
 
 function buildDisplayStatus(args: {
   session: SessionResponse["session"] | null
-  modelName: DemoModelName
+  modelName: string | null
+  supportedModels: SupportedModel[]
   missingConfig: string[]
   requestError: string | null
   roomError: string | null
@@ -106,6 +103,7 @@ function buildDisplayStatus(args: {
   const {
     session,
     modelName,
+    supportedModels,
     missingConfig,
     requestError,
     roomError,
@@ -134,7 +132,7 @@ function buildDisplayStatus(args: {
   if (createPending && !session) {
     return {
       label: "BOOTING",
-      detail: `Requesting a fresh ${modelLabel(modelName)} session.`,
+      detail: `Requesting a fresh ${modelLabel(modelName, supportedModels)} session.`,
       tone: "warm",
     }
   }
@@ -142,7 +140,9 @@ function buildDisplayStatus(args: {
   if (!session || session.state === "ENDED") {
     return {
       label: "OFF",
-      detail: `Press power to wake ${modelLabel(modelName)}.`,
+      detail: modelName
+        ? `Press power to wake ${modelLabel(modelName, supportedModels)}.`
+        : "No supported models available from the coordinator.",
       tone: "off",
     }
   }
@@ -166,7 +166,7 @@ function buildDisplayStatus(args: {
   if (session.state === "STARTING") {
     return {
       label: "STARTING",
-      detail: `Loading ${modelLabel(modelName)} and joining the room.`,
+      detail: `Loading ${modelLabel(modelName, supportedModels)} and joining the room.`,
       tone: "warm",
     }
   }
@@ -223,7 +223,8 @@ export function App() {
   )
   const [sessionResponse, setSessionResponse] = useState<SessionResponse | null>(null)
   const [sessionToken, setSessionToken] = useState<string | null>(null)
-  const [selectedModel, setSelectedModel] = useState<DemoModelName>(demoEnv.defaultModel)
+  const [supportedModels, setSupportedModels] = useState<SupportedModel[]>([])
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [requestError, setRequestError] = useState<string | null>(null)
   const [roomError, setRoomError] = useState<string | null>(null)
   const [createPending, setCreatePending] = useState(false)
@@ -243,16 +244,20 @@ export function App() {
     [environments, selectedEnvironmentId],
   )
   const selectedEnvironmentPrompt = selectedEnvironment?.prompt.trim() ?? ""
-  const canCreateSession = !session || isTerminalSessionState(session.state)
+  const canCreateSession =
+    Boolean(selectedModel) && (!session || isTerminalSessionState(session.state))
   const hasActiveSession = Boolean(session && !isTerminalSessionState(session.state))
   const canToggleTransport =
     session?.state === "RUNNING" || session?.state === "PAUSED"
   const resolvedModel =
-    normalizeModelName(capabilities?.manifest.model.name) ?? selectedModel
+    normalizeModelId(session?.model_name) ??
+    normalizeModelId(capabilities?.manifest.model.name) ??
+    selectedModel
   const promptSupported = hasPromptInput(capabilities)
   const status = buildDisplayStatus({
     session,
     modelName: resolvedModel,
+    supportedModels,
     missingConfig,
     requestError,
     roomError,
@@ -282,6 +287,39 @@ export function App() {
   }, [selectedEnvironmentId])
 
   useEffect(() => {
+    if (!demoEnv.coordinatorBaseUrl) {
+      return
+    }
+
+    let cancelled = false
+
+    const loadModels = async () => {
+      try {
+        const response = await getModels()
+        if (cancelled) {
+          return
+        }
+
+        setSupportedModels(response.models)
+        setSelectedModel((current) =>
+          selectPreferredModel(response.models, demoEnv.defaultModel, current),
+        )
+      } catch (error) {
+        if (!cancelled) {
+          setRequestError(
+            error instanceof Error ? error.message : "failed to load models",
+          )
+        }
+      }
+    }
+
+    void loadModels()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!environments.length) {
       if (selectedEnvironmentId !== null) {
         setSelectedEnvironmentId(null)
@@ -300,11 +338,22 @@ export function App() {
   }, [environments, selectedEnvironmentId])
 
   useEffect(() => {
-    const actualModel = normalizeModelName(capabilities?.manifest.model.name)
-    if (actualModel) {
+    setSelectedModel((current) =>
+      selectPreferredModel(supportedModels, demoEnv.defaultModel, current),
+    )
+  }, [supportedModels])
+
+  useEffect(() => {
+    const actualModel =
+      normalizeModelId(session?.model_name) ??
+      normalizeModelId(capabilities?.manifest.model.name)
+    if (
+      actualModel &&
+      supportedModels.some((model) => model.id === actualModel)
+    ) {
       setSelectedModel(actualModel)
     }
-  }, [capabilities?.manifest.model.name])
+  }, [capabilities?.manifest.model.name, session?.model_name, supportedModels])
 
   useEffect(() => {
     setTransportControlSignal(null)
@@ -399,6 +448,10 @@ export function App() {
       setRequestError(`Missing configuration: ${missingConfig.join(", ")}`)
       return
     }
+    if (!selectedModel) {
+      setRequestError("No supported models available from the coordinator")
+      return
+    }
 
     setCreatePending(true)
     setRequestError(null)
@@ -478,7 +531,7 @@ export function App() {
     <main className="console-stage">
       <section
         className="console-shell"
-        aria-label={`Lucid ${modelLabel(resolvedModel)} console`}
+        aria-label={`Lucid ${modelLabel(resolvedModel, supportedModels)} console`}
       >
         <div className="console-body">
           <div className="console-toolbar">
@@ -511,7 +564,7 @@ export function App() {
               type="button"
               className={`power-button ${hasActiveSession ? "power-button-on" : ""}`}
               onClick={() => void handlePowerToggle()}
-              disabled={createPending || endPending}
+              disabled={createPending || endPending || (!hasActiveSession && !selectedModel)}
               aria-label={hasActiveSession ? "End session" : "Start session"}
             >
               {createPending || endPending ? (
@@ -620,20 +673,20 @@ export function App() {
 
             <div className="model-picker">
               <Select
-                value={selectedModel}
-                onValueChange={(value) => {
-                  const nextModel = normalizeModelName(value)
-                  if (nextModel) {
-                    setSelectedModel(nextModel)
-                  }
-                }}
-                disabled={hasActiveSession || createPending || endPending}
+                value={selectedModel ?? undefined}
+                onValueChange={setSelectedModel}
+                disabled={
+                  hasActiveSession ||
+                  createPending ||
+                  endPending ||
+                  supportedModels.length === 0
+                }
               >
                 <SelectTrigger
                   aria-label="Model"
                   className="h-10 w-full max-w-[18rem] rounded-full px-4 text-sm shadow-none sm:w-fit sm:min-w-[16rem]"
                 >
-                  <SelectValue placeholder="Model" />
+                  <SelectValue placeholder="No models available" />
                 </SelectTrigger>
                 <SelectContent
                   align="start"
@@ -641,9 +694,9 @@ export function App() {
                   sideOffset={8}
                   className="shadow-none"
                 >
-                  {MODEL_OPTIONS.map((option) => (
-                    <SelectItem key={option.name} value={option.name} className="text-sm">
-                      {option.fullLabel}
+                  {supportedModels.map((model) => (
+                    <SelectItem key={model.id} value={model.id} className="text-sm">
+                      {model.display_name}
                     </SelectItem>
                   ))}
                 </SelectContent>

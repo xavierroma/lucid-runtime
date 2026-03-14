@@ -15,6 +15,9 @@ FROM debian:bookworm-slim
 RUN useradd --create-home --uid 10001 appuser
 
 COPY --from=builder /workspace/target/release/coordinator /usr/local/bin/coordinator
+COPY --from=builder /workspace/packages/contracts/generated /opt/lucid/contracts/generated
+
+RUN mkdir -p /app/config && chown -R appuser:appuser /app /opt/lucid
 
 USER appuser
 EXPOSE 8080

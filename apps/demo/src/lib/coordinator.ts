@@ -12,6 +12,7 @@ export type SessionState =
 export interface SessionRecord {
   session_id: string
   room_name: string
+  model_name: string
   state: SessionState
   error_code?: string | null
   end_reason?: string | null
@@ -97,6 +98,16 @@ export interface SessionResponse {
   capabilities: Capabilities
 }
 
+export interface SupportedModel {
+  id: string
+  display_name: string
+  description?: string | null
+}
+
+export interface ModelsResponse {
+  models: SupportedModel[]
+}
+
 interface ErrorResponse {
   error?: string
 }
@@ -142,15 +153,17 @@ async function request<T>(path: string, init?: RequestInit) {
   return (await response.json()) as T
 }
 
-export async function createSession(modelName?: string) {
+export async function getModels() {
+  return request<ModelsResponse>("/models")
+}
+
+export async function createSession(modelName: string) {
   return request<SessionResponse>("/sessions", {
     method: "POST",
-    headers: modelName
-      ? {
-          "Content-Type": "application/json",
-        }
-      : undefined,
-    body: modelName ? JSON.stringify({ model_name: modelName }) : undefined,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model_name: modelName }),
   })
 }
 

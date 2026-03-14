@@ -1,0 +1,55 @@
+{
+  "models": [
+    {
+      "id": "yume",
+      "display_name": "Yume",
+      "manifest_path": "/opt/lucid/contracts/generated/lucid_manifest.json",
+      "backend": {
+        "kind": "modal",
+        "dispatch_base_url": "https://replace-yume.modal.run",
+        "dispatch_token": "replace-with-yume-modal-dispatch-token",
+        "worker_id": "wm-yume"
+      },
+      "timeouts": {
+        "startup_timeout_secs": 120,
+        "session_max_duration_secs": 3600,
+        "session_cancel_grace_secs": 30,
+        "worker_heartbeat_timeout_secs": 15
+      }
+    },
+    {
+      "id": "waypoint",
+      "display_name": "Waypoint",
+      "manifest_path": "/opt/lucid/contracts/generated/lucid_manifest.waypoint.json",
+      "backend": {
+        "kind": "modal",
+        "dispatch_base_url": "https://replace-waypoint.modal.run",
+        "dispatch_token": "replace-with-waypoint-modal-dispatch-token",
+        "worker_id": "wm-waypoint"
+      },
+      "timeouts": {
+        "startup_timeout_secs": 900,
+        "session_max_duration_secs": 3600,
+        "session_cancel_grace_secs": 30,
+        "worker_heartbeat_timeout_secs": 15
+      }
+    },
+    {
+      "id": "helios",
+      "display_name": "Helios (Distilled)",
+      "manifest_path": "/opt/lucid/contracts/generated/lucid_manifest.helios.json",
+      "backend": {
+        "kind": "modal",
+        "dispatch_base_url": "https://replace-helios.modal.run",
+        "dispatch_token": "replace-with-helios-modal-dispatch-token",
+        "worker_id": "wm-helios"
+      },
+      "timeouts": {
+        "startup_timeout_secs": 900,
+        "session_max_duration_secs": 3600,
+        "session_cancel_grace_secs": 30,
+        "worker_heartbeat_timeout_secs": 15
+      }
+    }
+  ]
+}

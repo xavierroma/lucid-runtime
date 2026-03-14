@@ -28,6 +28,15 @@ REMOTE_NEEDS_AWS_CLI=0
 TRANSPORT=""
 RUN_SCRIPT_B64="$(base64 < "${SCRIPT_DIR}/run-coordinator.sh" | tr -d '\n')"
 ENV_FILE_B64="$(base64 < "${EC2_ENV_FILE}" | tr -d '\n')"
+LOCAL_MODELS_FILE="${EC2_MODELS_FILE:-${DEFAULT_MODELS_FILE}}"
+
+if [[ ! -f "${LOCAL_MODELS_FILE}" ]]; then
+  echo "models file not found: ${LOCAL_MODELS_FILE}" >&2
+  echo "copy deploy/ec2/coordinator.models.example.json to deploy/ec2/coordinator.models.json or set EC2_MODELS_FILE" >&2
+  exit 1
+fi
+
+MODELS_FILE_B64="$(base64 < "${LOCAL_MODELS_FILE}" | tr -d '\n')"
 
 if [[ ${IS_ECR} -eq 1 && -z "${REMOTE_LOGIN_COMMAND}" ]]; then
   REMOTE_NEEDS_AWS_CLI=1
@@ -108,6 +117,11 @@ if [[ "${REMOTE_ENV_FILE}" == "~/"* ]]; then
   REMOTE_ENV_FILE="/home/${EC2_USER}/${REMOTE_ENV_FILE#~/}"
 fi
 
+REMOTE_MODELS_FILE="${EC2_REMOTE_MODELS_FILE:-${REMOTE_DIR}/coordinator.models.json}"
+if [[ "${REMOTE_MODELS_FILE}" == "~/"* ]]; then
+  REMOTE_MODELS_FILE="/home/${EC2_USER}/${REMOTE_MODELS_FILE#~/}"
+fi
+
 REMOTE_RUN_SCRIPT="${REMOTE_DIR}/run-coordinator.sh"
 
 REMOTE_LOGIN_SNIPPET=""
@@ -154,8 +168,10 @@ printf '%s' $(printf '%q' "${RUN_SCRIPT_B64}") | base64 -d > $(printf '%q' "${RE
 chmod +x $(printf '%q' "${REMOTE_RUN_SCRIPT}")
 printf '%s' $(printf '%q' "${ENV_FILE_B64}") | base64 -d > $(printf '%q' "${REMOTE_ENV_FILE}")
 chmod 600 $(printf '%q' "${REMOTE_ENV_FILE}")
+printf '%s' $(printf '%q' "${MODELS_FILE_B64}") | base64 -d > $(printf '%q' "${REMOTE_MODELS_FILE}")
+chmod 600 $(printf '%q' "${REMOTE_MODELS_FILE}")
 ${REMOTE_LOGIN_SNIPPET}
-COORDINATOR_IMAGE=$(printf '%q' "${IMAGE}") HOST_PORT=$(printf '%q' "${HOST_PORT}") CONTAINER_NAME=$(printf '%q' "${CONTAINER_NAME}") $(printf '%q' "${REMOTE_RUN_SCRIPT}") $(printf '%q' "${REMOTE_ENV_FILE}")
+COORDINATOR_IMAGE=$(printf '%q' "${IMAGE}") HOST_PORT=$(printf '%q' "${HOST_PORT}") CONTAINER_NAME=$(printf '%q' "${CONTAINER_NAME}") $(printf '%q' "${REMOTE_RUN_SCRIPT}") $(printf '%q' "${REMOTE_ENV_FILE}") $(printf '%q' "${REMOTE_MODELS_FILE}")
 EOF
 )"
 

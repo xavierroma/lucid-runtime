@@ -4,13 +4,7 @@ const explicitCoordinatorBaseUrl = trim(import.meta.env.VITE_COORDINATOR_BASE_UR
 const proxyTarget = trim(import.meta.env.VITE_COORDINATOR_PROXY_TARGET)
 const devProxyBaseUrl =
   import.meta.env.DEV && !explicitCoordinatorBaseUrl && proxyTarget ? "/api" : ""
-const requestedDefaultModel = trim(import.meta.env.VITE_DEFAULT_MODEL).toLowerCase()
-const defaultModel =
-  requestedDefaultModel === "waypoint"
-    ? ("waypoint" as const)
-    : requestedDefaultModel === "helios"
-      ? ("helios" as const)
-      : ("yume" as const)
+const defaultModel = trim(import.meta.env.VITE_DEFAULT_MODEL).toLowerCase()
 
 export const demoEnv = {
   coordinatorApiKey: trim(import.meta.env.VITE_COORDINATOR_API_KEY),
