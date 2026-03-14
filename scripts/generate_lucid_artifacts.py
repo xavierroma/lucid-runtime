@@ -9,7 +9,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent.parent
-LUCID_SRC = ROOT / "packages" / "lucid" / "src"
+LUCID_PKG = ROOT / "packages" / "lucid"
 YUME_MODAL_EXAMPLE_SRC = ROOT / "examples" / "yume_modal" / "src"
 WAYPOINT_MODAL_EXAMPLE_SRC = ROOT / "examples" / "waypoint_modal" / "src"
 HELIOS_MODAL_EXAMPLE_SRC = ROOT / "examples" / "helios_modal" / "src"
@@ -30,7 +30,7 @@ HELIOS_TS_PATH = (
 
 
 def main() -> int:
-    sys.path.insert(0, str(LUCID_SRC))
+    sys.path.insert(0, str(LUCID_PKG))
     yume_manifest = _load_manifest(
         module_name="yume_modal_example.model",
         extra_path=YUME_MODAL_EXAMPLE_SRC,
@@ -67,7 +67,7 @@ def _load_manifest(*, module_name: str, extra_path: Path) -> dict[str, Any]:
     if str(extra_path) not in sys.path:
         sys.path.insert(0, str(extra_path))
 
-    capabilities = importlib.import_module("lucid.capabilities")
+    lucid = importlib.import_module("lucid")
     module = importlib.import_module(module_name)
     class_name = next(
         name
@@ -76,7 +76,8 @@ def _load_manifest(*, module_name: str, extra_path: Path) -> dict[str, Any]:
         and getattr(value, "__module__", None) == module_name
         and name.endswith("LucidModel")
     )
-    return capabilities.manifest(f"{module_name}:{class_name}")
+    model_cls = getattr(module, class_name)
+    return lucid.build_model_definition(model_cls).to_manifest()
 
 
 def render_ts(manifest: dict[str, Any]) -> str:

@@ -47,10 +47,7 @@ class _StubEngine:
 
 def _runtime_config() -> HeliosRuntimeConfig:
     return HeliosRuntimeConfig(
-        frame_width=640,
-        frame_height=384,
-        output_fps=100,
-        wm_engine="helios",
+        backend="fake",
         helios_model_source="/models/Helios-Distilled",
         helios_default_prompt="old prompt",
         helios_negative_prompt="avoid blur",

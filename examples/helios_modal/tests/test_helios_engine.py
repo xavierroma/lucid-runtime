@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from helios_modal_example.config import HeliosRuntimeConfig
+from helios_modal_example.config import HELIOS_VIDEO_HEIGHT, HELIOS_VIDEO_WIDTH, HeliosRuntimeConfig
 from helios_modal_example.engine import HeliosEngine
 
 
@@ -30,10 +30,7 @@ class _StubPipeline:
 
 def _config() -> HeliosRuntimeConfig:
     return HeliosRuntimeConfig(
-        frame_width=8,
-        frame_height=6,
-        output_fps=24,
-        wm_engine="helios",
+        backend="real",
         helios_model_source="/models/Helios-Distilled",
         helios_default_prompt="old prompt",
         helios_negative_prompt="avoid blur",
@@ -51,7 +48,7 @@ def _config() -> HeliosRuntimeConfig:
 async def test_engine_uses_t2v_then_v2v_continuation() -> None:
     config = _config()
     engine = HeliosEngine(config, logging.getLogger("tests.helios_engine"))
-    pipeline = _StubPipeline(config.frame_height, config.frame_width, config.helios_chunk_frames)
+    pipeline = _StubPipeline(HELIOS_VIDEO_HEIGHT, HELIOS_VIDEO_WIDTH, config.helios_chunk_frames)
     engine._loaded = True
     engine._pipeline = pipeline
     engine._prompt = "old prompt"

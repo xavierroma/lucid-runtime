@@ -6,7 +6,7 @@ from pathlib import Path
 
 import modal
 
-from lucid_modal import create_app, env_secret, load_runtime_config_from_env, with_lucid_runtime
+from lucid.modal import create_app, env_secret, load_runtime_config_from_env, with_lucid_runtime
 
 from .config import HeliosRuntimeConfig
 from .model import HeliosLucidModel
@@ -78,9 +78,6 @@ runtime_secret = env_secret(
     "HELIOS_MODEL_SOURCE",
     "HELIOS_DEFAULT_PROMPT",
     "HELIOS_NEGATIVE_PROMPT",
-    "HELIOS_FRAME_WIDTH",
-    "HELIOS_FRAME_HEIGHT",
-    "HELIOS_OUTPUT_FPS",
     "HELIOS_CHUNK_FRAMES",
     "HELIOS_GUIDANCE_SCALE",
     "HELIOS_PYRAMID_STEPS",
@@ -90,10 +87,7 @@ runtime_secret = env_secret(
     "HELIOS_MAX_SEQUENCE_LENGTH",
     "HF_HOME",
     "HF_TOKEN",
-    "WM_ENGINE",
-    "WM_LIVEKIT_MODE",
     "WM_STATUS_TOPIC",
-    "WM_MAX_QUEUE_FRAMES",
 )
 
 modal_bundle = create_app(

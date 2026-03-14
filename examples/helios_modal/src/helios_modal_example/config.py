@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -16,6 +17,9 @@ DEFAULT_PROMPT = (
     "A vibrant tropical fish swimming gracefully among colorful coral reefs in a clear, "
     "turquoise ocean."
 )
+HELIOS_VIDEO_WIDTH = 640
+HELIOS_VIDEO_HEIGHT = 384
+HELIOS_VIDEO_FPS = 24
 
 
 def _parse_csv_ints(value: str, *, default: tuple[int, ...]) -> tuple[int, ...]:
@@ -38,10 +42,7 @@ def _parse_bool(value: str, *, default: bool) -> bool:
 
 
 class HeliosRuntimeConfig(BaseModel):
-    frame_width: int = Field(default=640, gt=0)
-    frame_height: int = Field(default=384, gt=0)
-    output_fps: int = Field(default=24, gt=0)
-    wm_engine: str = Field(default="helios", min_length=1)
+    backend: Literal["real", "fake"] = "real"
     helios_model_source: str = Field(default="/models/Helios-Distilled", min_length=1)
     helios_default_prompt: str = Field(default=DEFAULT_PROMPT, min_length=1)
     helios_negative_prompt: str = Field(default=DEFAULT_NEGATIVE_PROMPT, min_length=1)
@@ -64,10 +65,6 @@ class HeliosRuntimeConfig(BaseModel):
     @classmethod
     def from_env(cls) -> "HeliosRuntimeConfig":
         return cls(
-            frame_width=int(os.getenv("HELIOS_FRAME_WIDTH", "640")),
-            frame_height=int(os.getenv("HELIOS_FRAME_HEIGHT", "384")),
-            output_fps=int(os.getenv("HELIOS_OUTPUT_FPS", "24")),
-            wm_engine=os.getenv("WM_ENGINE", "helios"),
             helios_model_source=os.getenv("HELIOS_MODEL_SOURCE", "/models/Helios-Distilled"),
             helios_default_prompt=os.getenv("HELIOS_DEFAULT_PROMPT", DEFAULT_PROMPT),
             helios_negative_prompt=os.getenv("HELIOS_NEGATIVE_PROMPT", DEFAULT_NEGATIVE_PROMPT),

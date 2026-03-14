@@ -15,7 +15,12 @@ from lucid import (
     publish,
 )
 
-from .config import HeliosRuntimeConfig
+from .config import (
+    HELIOS_VIDEO_FPS,
+    HELIOS_VIDEO_HEIGHT,
+    HELIOS_VIDEO_WIDTH,
+    HeliosRuntimeConfig,
+)
 from .engine import HeliosEngine
 
 
@@ -24,7 +29,7 @@ class HeliosSession(LucidSession["HeliosLucidModel"]):
         super().__init__(model, ctx)
         self.prompt = model.config.helios_default_prompt
 
-    @input(description="Update the scene prompt used by Helios.")
+    @input(description="Update the scene prompt used by Helios.", paused=True)
     def set_prompt(
         self,
         prompt: Annotated[str, Field(..., min_length=1)],
@@ -33,7 +38,7 @@ class HeliosSession(LucidSession["HeliosLucidModel"]):
 
     async def run(self) -> None:
         engine = self.model.require_engine()
-        frame_interval_s = 1.0 / max(int(self.model.config.output_fps), 1)
+        frame_interval_s = 1.0 / HELIOS_VIDEO_FPS
         await engine.start_session(self.prompt)
         last_prompt = self.prompt
         chunk_index = 0
@@ -97,12 +102,13 @@ class HeliosLucidModel(LucidModel[HeliosRuntimeConfig]):
     name = "helios"
     description = "Realtime Helios video generation runtime"
     config_cls = HeliosRuntimeConfig
+    session_cls = HeliosSession
     outputs = (
         publish.video(
             name="main_video",
-            width=640,
-            height=384,
-            fps=24,
+            width=HELIOS_VIDEO_WIDTH,
+            height=HELIOS_VIDEO_HEIGHT,
+            fps=HELIOS_VIDEO_FPS,
             pixel_format="rgb24",
         ),
     )

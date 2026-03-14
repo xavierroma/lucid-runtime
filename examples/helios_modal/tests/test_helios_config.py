@@ -4,10 +4,6 @@ from helios_modal_example.config import HeliosRuntimeConfig
 
 
 def test_runtime_config_from_env_reads_helios_env(monkeypatch) -> None:
-    monkeypatch.setenv("WM_ENGINE", "helios")
-    monkeypatch.setenv("HELIOS_FRAME_WIDTH", "768")
-    monkeypatch.setenv("HELIOS_FRAME_HEIGHT", "432")
-    monkeypatch.setenv("HELIOS_OUTPUT_FPS", "16")
     monkeypatch.setenv("HELIOS_MODEL_SOURCE", "/models/Helios-Distilled")
     monkeypatch.setenv("HELIOS_DEFAULT_PROMPT", "custom prompt")
     monkeypatch.setenv("HELIOS_NEGATIVE_PROMPT", "avoid blur")
@@ -21,10 +17,7 @@ def test_runtime_config_from_env_reads_helios_env(monkeypatch) -> None:
 
     config = HeliosRuntimeConfig.from_env()
 
-    assert config.wm_engine == "helios"
-    assert config.frame_width == 768
-    assert config.frame_height == 432
-    assert config.output_fps == 16
+    assert config.backend == "real"
     assert config.helios_model_source == "/models/Helios-Distilled"
     assert config.helios_default_prompt == "custom prompt"
     assert config.helios_negative_prompt == "avoid blur"

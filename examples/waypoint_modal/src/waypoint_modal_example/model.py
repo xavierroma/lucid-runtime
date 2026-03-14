@@ -24,7 +24,12 @@ from lucid import (
     wheel,
 )
 
-from .config import WaypointRuntimeConfig
+from .config import (
+    WAYPOINT_FRAME_HEIGHT,
+    WAYPOINT_FRAME_WIDTH,
+    WAYPOINT_OUTPUT_FPS,
+    WaypointRuntimeConfig,
+)
 from .engine import WaypointControlState, WaypointEngine
 
 _VK_LBUTTON = 0x01
@@ -59,7 +64,7 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
         self._buttons: set[int] = set()
         self._transient = _TransientWaypointInput()
 
-    @input(description="Update the text prompt used by Waypoint.")
+    @input(description="Update the text prompt used by Waypoint.", paused=True)
     def set_prompt(
         self,
         prompt: Annotated[str, Field(..., min_length=1)],
@@ -158,13 +163,13 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
             )
             raise
         self.ctx.logger.info(
-            "waypoint.session.run engine_session_started elapsed_ms=%.1f session_id=%s prompt_chars=%s target_fps=%s frame_width=%s frame_height=%s",
+            "waypoint.session.run engine_session_started elapsed_ms=%.1f session_id=%s prompt_chars=%s fps=%s frame_width=%s frame_height=%s",
             (perf_counter() - start) * 1000.0,
             self.ctx.session_id,
             len(self.prompt),
-            self.model.config.target_fps,
-            self.model.config.frame_width,
-            self.model.config.frame_height,
+            WAYPOINT_OUTPUT_FPS,
+            WAYPOINT_FRAME_WIDTH,
+            WAYPOINT_FRAME_HEIGHT,
         )
         last_prompt = self.prompt
         frame_index = 0
@@ -266,12 +271,13 @@ class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
     name = "waypoint"
     description = "Realtime Waypoint world model runtime"
     config_cls = WaypointRuntimeConfig
+    session_cls = WaypointSession
     outputs = (
         publish.video(
             name="main_video",
-            width=640,
-            height=360,
-            fps=20,
+            width=WAYPOINT_FRAME_WIDTH,
+            height=WAYPOINT_FRAME_HEIGHT,
+            fps=WAYPOINT_OUTPUT_FPS,
             pixel_format="rgb24",
         ),
     )
@@ -298,11 +304,11 @@ class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
             await self._engine.load(warmup=warmup_required)
         except Exception as exc:
             self.logger.error(
-                "waypoint.model.load failed duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s error_type=%s",
+                "waypoint.model.load failed duration_ms=%.1f frame_width=%s frame_height=%s fps=%s error_type=%s",
                 (perf_counter() - start) * 1000.0,
-                engine_config.frame_width,
-                engine_config.frame_height,
-                engine_config.target_fps,
+                WAYPOINT_FRAME_WIDTH,
+                WAYPOINT_FRAME_HEIGHT,
+                WAYPOINT_OUTPUT_FPS,
                 exc.__class__.__name__,
             )
             raise
@@ -315,11 +321,11 @@ class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
                     "post_warmup",
                 )
         self.logger.info(
-            "waypoint.model.load complete duration_ms=%.1f frame_width=%s frame_height=%s target_fps=%s",
+            "waypoint.model.load complete duration_ms=%.1f frame_width=%s frame_height=%s fps=%s",
             (perf_counter() - start) * 1000.0,
-            engine_config.frame_width,
-            engine_config.frame_height,
-            engine_config.target_fps,
+            WAYPOINT_FRAME_WIDTH,
+            WAYPOINT_FRAME_HEIGHT,
+            WAYPOINT_OUTPUT_FPS,
         )
 
     def create_session(self, ctx: SessionContext) -> WaypointSession:
@@ -375,9 +381,9 @@ class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):
             "model_source": self.config.waypoint_model_source,
             "ae_source": self.config.waypoint_ae_source,
             "prompt_encoder_source": self.config.waypoint_prompt_encoder_source,
-            "frame_width": int(self.config.frame_width),
-            "frame_height": int(self.config.frame_height),
-            "target_fps": int(self.config.target_fps),
+            "frame_width": WAYPOINT_FRAME_WIDTH,
+            "frame_height": WAYPOINT_FRAME_HEIGHT,
+            "output_fps": WAYPOINT_OUTPUT_FPS,
         }
 
 
