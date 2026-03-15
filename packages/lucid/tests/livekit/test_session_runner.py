@@ -11,7 +11,8 @@ import pytest
 from lucid import OutputSpec, SessionContext, publish
 from lucid.livekit import Assignment
 from lucid.livekit.config import RuntimeConfig, SessionConfig
-from lucid.livekit.runner import SessionRunner
+from lucid.livekit.runner import SessionRunner, _RealLiveKitTransport
+from lucid.core.input_file import InputFile
 
 
 class StubLiveKitAdapter:
@@ -23,6 +24,7 @@ class StubLiveKitAdapter:
         self.status_messages: list[bytes] = []
         self.connected = False
         self.outputs: tuple[OutputSpec, ...] = ()
+        self.status_sender = None
 
     async def connect(self, assignment: Assignment, outputs: tuple[OutputSpec, ...]) -> None:
         if self._fail_connect:
@@ -30,6 +32,9 @@ class StubLiveKitAdapter:
         _ = assignment
         self.connected = True
         self.outputs = outputs
+
+    def set_status_sender(self, sender) -> None:
+        self.status_sender = sender
 
     async def disconnect(self) -> None:
         self.connected = False
@@ -63,6 +68,10 @@ class StubLiveKitAdapter:
 
     async def inject_control(self, payload: bytes) -> None:
         await self._control_messages.put(payload)
+
+    def resolve_input_file(self, file_id: str):
+        _ = file_id
+        return None
 
 
 class StubLifecycleReporter:
@@ -222,7 +231,9 @@ class StubRuntime:
         room_name: str,
         publish_fn: Callable[[str, Any, int | None], Awaitable[None]],
         metrics_fn=None,
+        input_file_resolver=None,
     ) -> _StubRuntimeSession:
+        _ = input_file_resolver
         ctx = SessionContext(
             session_id=session_id,
             room_name=room_name,
@@ -244,6 +255,48 @@ def _runtime_config() -> RuntimeConfig:
 
 def _session_config() -> SessionConfig:
     return SessionConfig(worker_id="wm-worker-test")
+
+
+def test_transport_resolve_input_file_drops_previous_active_file(tmp_path) -> None:
+    logger = logging.getLogger("tests.session_runner.transport")
+    transport = _RealLiveKitTransport(
+        livekit_url="wss://example.livekit.invalid",
+        status_topic="wm.status",
+        logger=logger,
+    )
+    first_path = tmp_path / "first.png"
+    first_path.write_bytes(b"first")
+    second_path = tmp_path / "second.png"
+    second_path.write_bytes(b"second")
+    slot = ("", "")
+    transport._input_files["upload-1"] = InputFile(
+        id="upload-1",
+        filename="first.png",
+        mime_type="image/png",
+        size_bytes=5,
+        sha256="first",
+        path=first_path,
+    )
+    transport._input_file_slots["upload-1"] = slot
+    transport._active_upload_by_slot[slot] = "upload-1"
+    transport._latest_upload_by_slot[slot] = "upload-2"
+    transport._input_files["upload-2"] = InputFile(
+        id="upload-2",
+        filename="second.png",
+        mime_type="image/png",
+        size_bytes=6,
+        sha256="second",
+        path=second_path,
+    )
+    transport._input_file_slots["upload-2"] = slot
+
+    resolved = transport.resolve_input_file("upload-2")
+
+    assert resolved is not None
+    assert resolved.id == "upload-2"
+    assert "upload-1" not in transport._input_files
+    assert not first_path.exists()
+    assert second_path.exists()
 
 
 def _lifecycle_names(reporter: StubLifecycleReporter, session_id: str) -> list[str]:

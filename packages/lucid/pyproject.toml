@@ -16,7 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 livekit = [
   "httpx>=0.27,<1",
-  "livekit>=0.13,<0.14",
+  "livekit>=0.21,<0.22",
   "av>=13,<14",
 ]
 modal = [

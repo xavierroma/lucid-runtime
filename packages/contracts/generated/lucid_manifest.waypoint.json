@@ -262,6 +262,35 @@
       "args_schema": {
         "additionalProperties": false,
         "properties": {
+          "image": {
+            "title": "Image",
+            "type": "string",
+            "x-lucid-upload": {
+              "kind": "image",
+              "max_bytes": 1000000,
+              "mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+              ],
+              "target_height": 360,
+              "target_width": 640
+            }
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "title": "SetInitialFrameInputArgs",
+        "type": "object"
+      },
+      "description": "Set the initial frame used to seed Waypoint.",
+      "name": "set_initial_frame"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
           "prompt": {
             "minLength": 1,
             "title": "Prompt",

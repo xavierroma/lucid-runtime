@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from time import perf_counter
 from typing import Any, TypeAlias, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
 from .model import LoadContext, LucidError, LucidModel, LucidSession, ManifestDict, MetricsFn, PublishFn, SessionContext
+from .input_file import InputFile
 from .spec import InputDefinition, ModelTarget, OutputBinding, OutputSpec, build_model_definition, resolve_model_class
 
 
@@ -17,6 +18,7 @@ class ActionDispatchError(LucidError):
 
 
 ModelConfigInput: TypeAlias = BaseModel | Mapping[str, object] | None
+InputFileResolver: TypeAlias = Callable[[str], InputFile | None]
 T = TypeVar("T")
 
 
@@ -27,10 +29,12 @@ class RuntimeSession:
         runtime: "LucidRuntime",
         session: LucidSession[Any],
         ctx: SessionContext,
+        input_file_resolver: InputFileResolver | None = None,
     ) -> None:
         self._runtime = runtime
         self.session = session
         self.ctx = ctx
+        self._input_file_resolver = input_file_resolver
 
     async def run(self) -> None:
         await _maybe_await(self.session.run())
@@ -44,8 +48,31 @@ class RuntimeSession:
             validated = definition.arg_model.model_validate(args)
         except ValidationError as exc:
             raise ActionDispatchError(f"invalid input args for {name}: {exc}") from exc
+        resolved_args = validated.model_dump()
+        for field_name, upload in definition.upload_fields.items():
+            upload_id = resolved_args.get(field_name)
+            if upload_id is None and upload.optional:
+                continue
+            if not isinstance(upload_id, str) or not upload_id.strip():
+                raise ActionDispatchError(f"invalid input file id for {name}.{field_name}")
+            if self._input_file_resolver is None:
+                raise ActionDispatchError(f"input file uploads are not available for {name}.{field_name}")
+            input_file = self._input_file_resolver(upload_id)
+            if input_file is None:
+                raise ActionDispatchError(f"unknown input file for {name}.{field_name}: {upload_id}")
+            if input_file.mime_type.lower() not in upload.mime_types:
+                raise ActionDispatchError(
+                    f"invalid MIME type for {name}.{field_name}: {input_file.mime_type}"
+                )
+            if input_file.size_bytes > upload.max_bytes:
+                raise ActionDispatchError(
+                    f"input file too large for {name}.{field_name}: {input_file.size_bytes} > {upload.max_bytes}"
+                )
+            if not input_file.path.exists():
+                raise ActionDispatchError(f"missing input file for {name}.{field_name}: {upload_id}")
+            resolved_args[field_name] = input_file
         await _maybe_await(
-            getattr(self.session, definition.handler_name)(**validated.model_dump())
+            getattr(self.session, definition.handler_name)(**resolved_args)
         )
 
     def allows_input_while_paused(self, name: str) -> bool:
@@ -134,6 +161,7 @@ class LucidRuntime:
         room_name: str,
         publish_fn: PublishFn,
         metrics_fn: MetricsFn | None = None,
+        input_file_resolver: InputFileResolver | None = None,
     ) -> RuntimeSession:
         ctx = SessionContext(
             session_id=session_id,
@@ -150,7 +178,12 @@ class LucidRuntime:
             raise LucidError(
                 f"create_session() returned {session.__class__.__name__}, expected {self.definition.session_cls.__name__}"
             )
-        return RuntimeSession(runtime=self, session=session, ctx=ctx)
+        return RuntimeSession(
+            runtime=self,
+            session=session,
+            ctx=ctx,
+            input_file_resolver=input_file_resolver,
+        )
 
 
 def _coerce_model_config(
