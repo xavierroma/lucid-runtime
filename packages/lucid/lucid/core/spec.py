@@ -3,12 +3,14 @@ from __future__ import annotations
 import importlib
 import inspect
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any, Literal, TypeAlias, TypedDict, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, create_model
+from pydantic.fields import FieldInfo
 
+from .input_file import resolve_input_file_annotation
 from .model import JsonValue, LucidError, LucidModel, LucidSession, ManifestDict
 
 
@@ -250,11 +252,19 @@ class InputMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class UploadFieldSpec:
+    mime_types: tuple[str, ...]
+    max_bytes: int
+    optional: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class InputDefinition:
     metadata: InputMetadata
     arg_model: type[BaseModel]
     handler_name: str
     paused: bool
+    upload_fields: dict[str, UploadFieldSpec] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -479,6 +489,7 @@ def _build_input_definition(
     type_hints = get_type_hints(handler, include_extras=True)
     fields: dict[str, tuple[object, object]] = {}
     param_names: list[str] = []
+    upload_fields: dict[str, UploadFieldSpec] = {}
 
     for parameter_name, parameter in signature.parameters.items():
         if parameter_name == "self":
@@ -488,10 +499,22 @@ def _build_input_definition(
             raise ManifestGenerationError(
                 f"input {metadata.name} parameter {parameter_name} must have a type annotation"
             )
-        fields[parameter_name] = (
-            annotation,
-            ... if parameter.default is inspect.Signature.empty else parameter.default,
-        )
+        default = ... if parameter.default is inspect.Signature.empty else parameter.default
+        input_file_annotation = resolve_input_file_annotation(annotation)
+        if input_file_annotation is not None:
+            allows_none = input_file_annotation
+            upload_fields[parameter_name] = _build_upload_field(
+                metadata.name,
+                parameter_name,
+                default,
+                optional=allows_none,
+            )
+            fields[parameter_name] = (
+                str | None if allows_none else str,
+                default,
+            )
+        else:
+            fields[parameter_name] = (annotation, default)
         param_names.append(parameter_name)
 
     arg_model = create_model(
@@ -507,6 +530,7 @@ def _build_input_definition(
         arg_model=arg_model,
         handler_name=handler_name,
         paused=_resolve_paused(metadata),
+        upload_fields=upload_fields,
     )
 
 
@@ -574,3 +598,47 @@ def _validate_binding_signature(
             )
         return
     raise ManifestGenerationError(f"unsupported binding for input {input_name}: {binding!r}")
+
+
+def _build_upload_field(
+    input_name: str,
+    parameter_name: str,
+    default: object,
+    *,
+    optional: bool,
+) -> UploadFieldSpec:
+    if not isinstance(default, FieldInfo):
+        raise ManifestGenerationError(
+            f"input {input_name} parameter {parameter_name} must use file_input() or image_input()"
+        )
+    extra = default.json_schema_extra
+    if not isinstance(extra, dict):
+        raise ManifestGenerationError(
+            f"input {input_name} parameter {parameter_name} is missing x-lucid-upload metadata"
+        )
+    upload = extra.get("x-lucid-upload")
+    if not isinstance(upload, dict):
+        raise ManifestGenerationError(
+            f"input {input_name} parameter {parameter_name} is missing x-lucid-upload metadata"
+        )
+    raw_mime_types = upload.get("mime_types")
+    if not isinstance(raw_mime_types, list) or not raw_mime_types:
+        raise ManifestGenerationError(
+            f"input {input_name} parameter {parameter_name} must declare non-empty MIME types"
+        )
+    mime_types = tuple(str(item).strip().lower() for item in raw_mime_types if str(item).strip())
+    if not mime_types:
+        raise ManifestGenerationError(
+            f"input {input_name} parameter {parameter_name} must declare non-empty MIME types"
+        )
+    try:
+        max_bytes = int(upload.get("max_bytes"))
+    except (TypeError, ValueError) as exc:
+        raise ManifestGenerationError(
+            f"input {input_name} parameter {parameter_name} must declare a positive max_bytes"
+        ) from exc
+    if max_bytes <= 0:
+        raise ManifestGenerationError(
+            f"input {input_name} parameter {parameter_name} must declare a positive max_bytes"
+        )
+    return UploadFieldSpec(mime_types=mime_types, max_bytes=max_bytes, optional=optional)

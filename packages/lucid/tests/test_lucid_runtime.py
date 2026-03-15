@@ -7,9 +7,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from lucid import LucidModel, LucidSession, SessionContext, build_model_definition, input, manifest, publish
+from lucid import (
+    InputFile,
+    LucidModel,
+    LucidSession,
+    SessionContext,
+    build_model_definition,
+    image_input,
+    input,
+    manifest,
+    publish,
+)
 from lucid.core import ManifestGenerationError
-from lucid.core.runtime import LucidRuntime
+from lucid.core.runtime import ActionDispatchError, LucidRuntime
 from lucid.livekit import RuntimeConfig, capabilities
 from yume_modal_example.model import YumeLucidModel
 
@@ -48,6 +58,27 @@ class _MissingAnnotationModel(LucidModel):
 
     def create_session(self, ctx: SessionContext) -> _MissingAnnotationSession:
         return _MissingAnnotationSession(self, ctx)
+
+
+class _InputFileSession(LucidSession):
+    def __init__(self, model, ctx: SessionContext) -> None:
+        super().__init__(model, ctx)
+        self.initial_frame: InputFile | None = None
+
+    @input(description="Set an initial frame.", paused=True)
+    def set_initial_frame(self, image: InputFile = image_input(size=(64, 64))) -> None:
+        self.initial_frame = image
+
+    async def run(self) -> None:
+        self.ctx.running = False
+
+
+class _InputFileModel(LucidModel):
+    session_cls = _InputFileSession
+    outputs = (publish.bytes(name="state"),)
+
+    def create_session(self, ctx: SessionContext) -> _InputFileSession:
+        return _InputFileSession(self, ctx)
 
 
 @pytest.mark.asyncio
@@ -118,6 +149,40 @@ def test_runtime_and_capabilities_share_output_binding_source() -> None:
     assert runtime.output_bindings() == capabilities(model=YumeLucidModel)["output_bindings"]
 
 
+def test_manifest_includes_uploaded_file_metadata() -> None:
+    generated = manifest(_InputFileModel)
+
+    assert generated["inputs"] == [
+        {
+            "name": "set_initial_frame",
+            "description": "Set an initial frame.",
+            "args_schema": {
+                "additionalProperties": False,
+                "properties": {
+                    "image": {
+                        "title": "Image",
+                        "type": "string",
+                        "x-lucid-upload": {
+                            "kind": "image",
+                            "max_bytes": 1_000_000,
+                            "mime_types": [
+                                "image/jpeg",
+                                "image/png",
+                                "image/webp",
+                            ],
+                            "target_height": 64,
+                            "target_width": 64,
+                        },
+                    }
+                },
+                "required": ["image"],
+                "title": "SetInitialFrameInputArgs",
+                "type": "object",
+            },
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_session_context_validates_video_json_and_bytes_outputs() -> None:
     seen: list[tuple[str, object]] = []
@@ -185,6 +250,64 @@ async def test_session_context_waits_until_resumed() -> None:
 
     assert ctx.resume() is True
     await asyncio.wait_for(waiter, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_runtime_resolves_uploaded_file_ids(tmp_path: Path) -> None:
+    runtime = LucidRuntime.load_model(
+        runtime_config=RuntimeConfig(livekit_url="wss://example.livekit.invalid"),
+        logger=_logger(),
+        model=_InputFileModel,
+    )
+    input_path = tmp_path / "seed.png"
+    input_path.write_bytes(b"seed")
+    resolved = InputFile(
+        id="upload-1",
+        filename="seed.png",
+        mime_type="image/png",
+        size_bytes=4,
+        sha256="seed",
+        path=input_path,
+    )
+
+    def resolve_input_file(file_id: str) -> InputFile | None:
+        if file_id == "upload-1":
+            return resolved
+        return None
+
+    runtime_session = runtime.open_session(
+        session_id="s1",
+        room_name="wm-s1",
+        publish_fn=_noop_publish,
+        input_file_resolver=resolve_input_file,
+    )
+
+    await runtime_session.dispatch_input("set_initial_frame", {"image": "upload-1"})
+
+    assert isinstance(runtime_session.session, _InputFileSession)
+    assert runtime_session.session.initial_frame == resolved
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_unknown_uploaded_file_ids() -> None:
+    runtime = LucidRuntime.load_model(
+        runtime_config=RuntimeConfig(livekit_url="wss://example.livekit.invalid"),
+        logger=_logger(),
+        model=_InputFileModel,
+    )
+
+    def resolve_input_file(_file_id: str) -> InputFile | None:
+        return None
+
+    runtime_session = runtime.open_session(
+        session_id="s1",
+        room_name="wm-s1",
+        publish_fn=_noop_publish,
+        input_file_resolver=resolve_input_file,
+    )
+
+    with pytest.raises(ActionDispatchError, match="unknown input file"):
+        await runtime_session.dispatch_input("set_initial_frame", {"image": "missing"})
 
 
 def test_generated_artifacts_are_fresh() -> None:

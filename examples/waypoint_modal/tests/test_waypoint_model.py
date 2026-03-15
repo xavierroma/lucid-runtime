@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import tempfile
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from lucid import LoadContext, SessionContext, build_model_definition
+from lucid import InputFile, LoadContext, SessionContext, build_model_definition
 
 from waypoint_modal_example.config import WaypointRuntimeConfig
 from waypoint_modal_example.engine import WaypointControlState, WaypointEngine
@@ -19,7 +21,9 @@ class _StubEngine:
     def __init__(self) -> None:
         self.prompt = ""
         self.start_prompts: list[str] = []
+        self.start_initial_frames: list[Path | None] = []
         self.updated_prompts: list[str] = []
+        self.initial_frame_updates: list[tuple[str, Path]] = []
         self.controls: list[WaypointControlState] = []
         self.generate_calls = 0
         self.end_calls = 0
@@ -27,13 +31,18 @@ class _StubEngine:
     async def load(self) -> None:
         return None
 
-    async def start_session(self, prompt: str) -> None:
+    async def start_session(self, prompt: str, initial_frame_path: Path | None = None) -> None:
         self.prompt = prompt
         self.start_prompts.append(prompt)
+        self.start_initial_frames.append(initial_frame_path)
 
     async def update_prompt(self, prompt: str) -> None:
         self.prompt = prompt
         self.updated_prompts.append(prompt)
+
+    async def set_initial_frame(self, prompt: str, image_path: Path) -> None:
+        self.prompt = prompt
+        self.initial_frame_updates.append((prompt, image_path))
 
     async def generate_frame(self, controls: WaypointControlState) -> tuple[np.ndarray, float]:
         self.generate_calls += 1
@@ -69,6 +78,7 @@ def test_waypoint_manifest_exposes_inputs() -> None:
 
     assert {
         "set_prompt",
+        "set_initial_frame",
         "forward",
         "backward",
         "left",
@@ -192,6 +202,53 @@ async def test_session_pause_stops_new_generation_until_resume() -> None:
     assert [int(frame[0, 0, 0]) for frame in published] == [10, 10]
     assert engine.start_prompts == ["old prompt"]
     assert engine.generate_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_session_applies_initial_frame_updates_at_safe_boundary() -> None:
+    temp_dir = Path(tempfile.mkdtemp(prefix="waypoint-initial-frame-test-"))
+    seed_path = temp_dir / "seed.png"
+    seed_path.write_bytes(b"seed")
+    engine = _StubEngine()
+    model = _build_model(engine)
+    ctx: SessionContext | None = None
+    session = None
+
+    input_file = InputFile(
+        id="upload-1",
+        filename="seed.png",
+        mime_type="image/png",
+        size_bytes=4,
+        sha256="seed",
+        path=seed_path,
+    )
+
+    async def publish_fn(_name: str, _payload: object, _ts_ms: int | None) -> None:
+        assert ctx is not None
+        assert session is not None
+        if engine.generate_calls == 1:
+            session.set_initial_frame(input_file)
+            return
+        if engine.generate_calls == 2:
+            ctx.running = False
+
+    try:
+        ctx = SessionContext(
+            session_id="s1",
+            room_name="wm-s1",
+            outputs=model.outputs,
+            publish_fn=publish_fn,
+            logger=logging.getLogger("tests.waypoint_model"),
+        )
+        session = model.create_session(ctx)
+
+        await asyncio.wait_for(session.run(), timeout=1.0)
+
+        assert engine.start_initial_frames == [None]
+        assert engine.initial_frame_updates == [("old prompt", seed_path)]
+    finally:
+        seed_path.unlink(missing_ok=True)
+        temp_dir.rmdir()
 
 
 @pytest.mark.asyncio

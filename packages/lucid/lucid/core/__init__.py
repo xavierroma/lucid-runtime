@@ -1,3 +1,4 @@
+from .input_file import InputFile, file_input, image_input
 from .model import (
     LoadContext,
     LucidError,
@@ -35,6 +36,7 @@ __all__ = [
     "HoldBinding",
     "InputBinding",
     "InputDefinition",
+    "InputFile",
     "LoadContext",
     "LucidError",
     "LucidModel",
@@ -50,8 +52,10 @@ __all__ = [
     "SessionContext",
     "WheelBinding",
     "axis",
+    "file_input",
     "build_model_definition",
     "hold",
+    "image_input",
     "input",
     "manifest",
     "pointer",
