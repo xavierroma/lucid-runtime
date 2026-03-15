@@ -16,31 +16,21 @@ class MySession(LucidSession["MyModel"]):
     def __init__(self, model: "MyModel", ctx: SessionContext) -> None:
         super().__init__(model, ctx)
         self.prompt = "..."
-        self.keys = {"forward": False, "left": False, "backward": False, "right": False}
+        self.active_inputs: set[str] = set()
 
     @input(description="Update the prompt.", paused=True)
     def set_prompt(self, prompt: str) -> None:
         self.prompt = prompt
 
     @input(binding=hold(keys=("KeyW",)))
-    def move_forward(self, pressed: bool) -> None:
-        self.keys["forward"] = pressed
+    def move_fwd(self, pressed: bool) -> None:
+        self.active_inputs.add("fwd") if pressed else self.active_inputs.discard("fwd")
 
-    @input(binding=hold(keys=("KeyA",)))
-    def move_left(self, pressed: bool) -> None:
-        self.keys["left"] = pressed
-
-    @input(binding=hold(keys=("KeyS",)))
-    def move_backward(self, pressed: bool) -> None:
-        self.keys["backward"] = pressed
-
-    @input(binding=hold(keys=("KeyD",)))
-    def move_right(self, pressed: bool) -> None:
-        self.keys["right"] = pressed
+    # move_l/move_bwd/move_r are the same as move_fwd.
 
     async def run(self) -> None:
         while self.ctx.running:
-            frame = self.model.render_frame(self.prompt, self.keys)
+            frame = self.model.render_frame(self.prompt, frozenset(self.active_inputs))
             await self.ctx.publish("main_video", frame)
 
 
@@ -57,6 +47,10 @@ That is basically the port: define a session, give inputs real Python type annot
 the outputs, and return the session from `create_session()`. Lucid derives the manifest, input
 bindings, and runtime plumbing from that contract; your actual model loading and inference code
 stays yours.
+
+The four `hold(...)` bindings above wire `W`, `A`, `S`, and `D` to movement. The Waypoint example
+uses the same pattern, then adds arrow-key aliases plus jump, sprint, crouch, mouse buttons,
+relative look, and wheel input.
 
 ## Repo layout
 
