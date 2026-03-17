@@ -13,11 +13,13 @@ from typing import Annotated
 from pydantic import Field
 
 from lucid import (
+    InputFile,
     LoadContext,
     LucidModel,
     LucidSession,
     SessionContext,
     hold,
+    image_input,
     input,
     pointer,
     publish,
@@ -63,6 +65,7 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
         self.prompt = model.config.waypoint_default_prompt
         self._buttons: set[int] = set()
         self._transient = _TransientWaypointInput()
+        self._pending_initial_frame: InputFile | None = None
 
     @input(description="Update the text prompt used by Waypoint.", paused=True)
     def set_prompt(
@@ -70,6 +73,13 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
         prompt: Annotated[str, Field(..., min_length=1)],
     ) -> None:
         self.prompt = prompt.strip() or self.model.config.waypoint_default_prompt
+
+    @input(description="Set the initial frame used to seed Waypoint.", paused=True)
+    def set_initial_frame(
+        self,
+        image: InputFile = image_input(size=(WAYPOINT_FRAME_WIDTH, WAYPOINT_FRAME_HEIGHT)),
+    ) -> None:
+        self._pending_initial_frame = image
 
     @input(
         description="Move forward.",
@@ -152,8 +162,12 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
     async def run(self) -> None:
         engine = self.model.require_engine()
         start = perf_counter()
+        initial_prompt = self.prompt.strip() or self.model.config.waypoint_default_prompt
         try:
-            await engine.start_session(self.prompt)
+            await engine.start_session(
+                initial_prompt,
+                initial_frame_path=self._take_pending_initial_frame_path(),
+            )
         except Exception as exc:
             self.ctx.logger.error(
                 "waypoint.session.run failed duration_ms=%.1f session_id=%s error_type=%s",
@@ -171,7 +185,7 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
             WAYPOINT_FRAME_WIDTH,
             WAYPOINT_FRAME_HEIGHT,
         )
-        last_prompt = self.prompt
+        last_prompt = initial_prompt
         frame_index = 0
         try:
             while self.ctx.running:
@@ -179,7 +193,18 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
                 if not self.ctx.running:
                     break
                 prompt = self.prompt.strip() or self.model.config.waypoint_default_prompt
-                if prompt != last_prompt:
+                initial_frame_path = self._take_pending_initial_frame_path()
+                if initial_frame_path is not None:
+                    await engine.set_initial_frame(prompt, initial_frame_path)
+                    last_prompt = prompt
+                    self.ctx.logger.info(
+                        "waypoint.session.run initial_frame_updated elapsed_ms=%.1f session_id=%s frame_index=%s prompt_chars=%s",
+                        (perf_counter() - start) * 1000.0,
+                        self.ctx.session_id,
+                        frame_index,
+                        len(prompt),
+                    )
+                elif prompt != last_prompt:
                     await engine.update_prompt(prompt)
                     last_prompt = prompt
                     self.ctx.logger.info(
@@ -265,6 +290,13 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
             self._buttons.add(button_id)
             return
         self._buttons.discard(button_id)
+
+    def _take_pending_initial_frame_path(self) -> Path | None:
+        pending = self._pending_initial_frame
+        self._pending_initial_frame = None
+        if pending is None:
+            return None
+        return pending.path
 
 
 class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):

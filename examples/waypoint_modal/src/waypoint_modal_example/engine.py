@@ -85,10 +85,15 @@ class WaypointEngine:
             self._config.waypoint_model_source,
         )
 
-    async def start_session(self, prompt: str) -> None:
+    async def start_session(self, prompt: str, initial_frame_path: Path | None = None) -> None:
         start = perf_counter()
         try:
-            await self._run_on_cuda_thread(lambda: self._reset_session_sync(prompt))
+            if initial_frame_path is None:
+                await self._run_on_cuda_thread(lambda: self._reset_session_sync(prompt))
+            else:
+                await self._run_on_cuda_thread(
+                    lambda: self._set_initial_frame_sync(prompt, initial_frame_path)
+                )
         except Exception as exc:
             self._logger.error(
                 "waypoint.engine.start_session failed duration_ms=%.1f prompt_chars=%s error_type=%s",
@@ -99,6 +104,24 @@ class WaypointEngine:
             raise
         self._logger.info(
             "waypoint.engine.start_session complete duration_ms=%.1f prompt_chars=%s",
+            (perf_counter() - start) * 1000.0,
+            len(prompt),
+        )
+
+    async def set_initial_frame(self, prompt: str, image_path: Path) -> None:
+        start = perf_counter()
+        try:
+            await self._run_on_cuda_thread(lambda: self._set_initial_frame_sync(prompt, image_path))
+        except Exception as exc:
+            self._logger.error(
+                "waypoint.engine.set_initial_frame failed duration_ms=%.1f prompt_chars=%s error_type=%s",
+                (perf_counter() - start) * 1000.0,
+                len(prompt),
+                exc.__class__.__name__,
+            )
+            raise
+        self._logger.info(
+            "waypoint.engine.set_initial_frame complete duration_ms=%.1f prompt_chars=%s",
             (perf_counter() - start) * 1000.0,
             len(prompt),
         )
@@ -249,6 +272,15 @@ class WaypointEngine:
             return
         engine.set_prompt(prompt)
         self._current_prompt = prompt
+
+    def _set_initial_frame_sync(self, prompt: str, image_path: Path) -> None:
+        frame = self._load_seed_image_from_path(
+            image_path,
+            width=WAYPOINT_FRAME_WIDTH,
+            height=WAYPOINT_FRAME_HEIGHT,
+        )
+        self._seed_frame = frame
+        self._reset_session_sync(prompt, seed_frame=frame)
 
     def _generate_frame_sync(self, controls: WaypointControlState) -> np.ndarray:
         import torch
