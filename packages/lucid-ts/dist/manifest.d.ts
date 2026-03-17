@@ -1,0 +1,11 @@
+import type { InputBinding, LucidManifest, ManifestInput, UploadFieldConfig, UploadInputSpec } from "./types.js";
+export declare function manifestForModel(modelId: string | null, capabilitiesManifest: LucidManifest | null, staticManifests: Record<string, LucidManifest>): LucidManifest | null;
+export declare function findInputByName(inputs: ManifestInput[] | readonly ManifestInput[], name: string): ManifestInput | null;
+export declare function findInputsByBinding<TKind extends InputBinding["kind"]>(inputs: ManifestInput[] | readonly ManifestInput[], kind: TKind): ManifestInput[];
+export declare function findPromptInput(inputs: ManifestInput[] | readonly ManifestInput[]): ManifestInput | null;
+export declare function findUploadedFileInput(inputs: ManifestInput[] | readonly ManifestInput[]): UploadInputSpec;
+export declare function findUploadedFileInputs(inputs: ManifestInput[] | readonly ManifestInput[]): UploadInputSpec[];
+export declare function uploadAcceptAttribute(upload: UploadFieldConfig): string;
+export declare function inputProperties(input: ManifestInput): Record<string, Record<string, unknown> | undefined>;
+export declare function isStringWireField(schema: Record<string, unknown> | undefined): boolean;
+export declare function parseUploadField(value: unknown): UploadFieldConfig | null;
