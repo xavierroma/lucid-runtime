@@ -68,8 +68,6 @@ class RuntimeSession:
                 raise ActionDispatchError(
                     f"input file too large for {name}.{field_name}: {input_file.size_bytes} > {upload.max_bytes}"
                 )
-            if not input_file.path.exists():
-                raise ActionDispatchError(f"missing input file for {name}.{field_name}: {upload_id}")
             resolved_args[field_name] = input_file
         await _maybe_await(
             getattr(self.session, definition.handler_name)(**resolved_args)

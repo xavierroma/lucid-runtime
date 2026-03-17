@@ -10,6 +10,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Annotated
 
+import numpy as np
+
 from pydantic import Field
 
 from lucid import (
@@ -62,24 +64,34 @@ class _TransientWaypointInput:
 class WaypointSession(LucidSession["WaypointLucidModel"]):
     def __init__(self, model: "WaypointLucidModel", ctx: SessionContext) -> None:
         super().__init__(model, ctx)
-        self.prompt = model.config.waypoint_default_prompt
+        self.prompt: str = ""
         self._buttons: set[int] = set()
         self._transient = _TransientWaypointInput()
-        self._pending_initial_frame: InputFile | None = None
+        self._pending_seed_frame: np.ndarray | None = None
 
     @input(description="Update the text prompt used by Waypoint.", paused=True)
     def set_prompt(
         self,
         prompt: Annotated[str, Field(..., min_length=1)],
     ) -> None:
-        self.prompt = prompt.strip() or self.model.config.waypoint_default_prompt
+        self.prompt = prompt.strip()
 
     @input(description="Set the initial frame used to seed Waypoint.", paused=True)
     def set_initial_frame(
         self,
         image: InputFile = image_input(size=(WAYPOINT_FRAME_WIDTH, WAYPOINT_FRAME_HEIGHT)),
     ) -> None:
-        self._pending_initial_frame = image
+        from PIL import Image
+        with image.open() as f:
+            pil_image = Image.open(f).convert("RGB")
+            if pil_image.size != (WAYPOINT_FRAME_WIDTH, WAYPOINT_FRAME_HEIGHT):
+                pil_image = pil_image.resize(
+                    (WAYPOINT_FRAME_WIDTH, WAYPOINT_FRAME_HEIGHT),
+                    Image.Resampling.BILINEAR,
+                )
+            self._pending_seed_frame = np.ascontiguousarray(
+                np.asarray(pil_image, dtype=np.uint8)
+            )
 
     @input(
         description="Move forward.",
@@ -162,11 +174,15 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
     async def run(self) -> None:
         engine = self.model.require_engine()
         start = perf_counter()
-        initial_prompt = self.prompt.strip() or self.model.config.waypoint_default_prompt
+        initial_prompt = self.prompt.strip()
+        if not initial_prompt:
+            raise RuntimeError("waypoint session: prompt must be set via set_prompt before starting")
+        if self._pending_seed_frame is None:
+            raise RuntimeError("waypoint session: initial frame must be set via set_initial_frame before starting")
         try:
             await engine.start_session(
                 initial_prompt,
-                initial_frame_path=self._take_pending_initial_frame_path(),
+                seed_frame=self._take_pending_seed_frame(),
             )
         except Exception as exc:
             self.ctx.logger.error(
@@ -192,10 +208,10 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
                 await self.ctx.wait_if_paused()
                 if not self.ctx.running:
                     break
-                prompt = self.prompt.strip() or self.model.config.waypoint_default_prompt
-                initial_frame_path = self._take_pending_initial_frame_path()
-                if initial_frame_path is not None:
-                    await engine.set_initial_frame(prompt, initial_frame_path)
+                prompt = self.prompt
+                seed_frame = self._take_pending_seed_frame()
+                if seed_frame is not None:
+                    await engine.set_initial_frame(prompt, seed_frame)
                     last_prompt = prompt
                     self.ctx.logger.info(
                         "waypoint.session.run initial_frame_updated elapsed_ms=%.1f session_id=%s frame_index=%s prompt_chars=%s",
@@ -291,12 +307,10 @@ class WaypointSession(LucidSession["WaypointLucidModel"]):
             return
         self._buttons.discard(button_id)
 
-    def _take_pending_initial_frame_path(self) -> Path | None:
-        pending = self._pending_initial_frame
-        self._pending_initial_frame = None
-        if pending is None:
-            return None
-        return pending.path
+    def _take_pending_seed_frame(self) -> np.ndarray | None:
+        pending = self._pending_seed_frame
+        self._pending_seed_frame = None
+        return pending
 
 
 class WaypointLucidModel(LucidModel[WaypointRuntimeConfig]):

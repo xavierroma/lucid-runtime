@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
-from pathlib import Path
 from types import UnionType
-from typing import Sequence, Union, get_args, get_origin
+from typing import IO, Sequence, Union, get_args, get_origin
 
 from pydantic import Field
 from pydantic.fields import FieldInfo
@@ -19,10 +19,10 @@ class InputFile:
     mime_type: str
     size_bytes: int
     sha256: str
-    path: Path
+    data: bytes
 
-    def open(self, mode: str = "rb"):
-        return self.path.open(mode)
+    def open(self) -> IO[bytes]:
+        return io.BytesIO(self.data)
 
 
 def file_input(

@@ -253,21 +253,19 @@ async def test_session_context_waits_until_resumed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_resolves_uploaded_file_ids(tmp_path: Path) -> None:
+async def test_runtime_resolves_uploaded_file_ids() -> None:
     runtime = LucidRuntime.load_model(
         runtime_config=RuntimeConfig(livekit_url="wss://example.livekit.invalid"),
         logger=_logger(),
         model=_InputFileModel,
     )
-    input_path = tmp_path / "seed.png"
-    input_path.write_bytes(b"seed")
     resolved = InputFile(
         id="upload-1",
         filename="seed.png",
         mime_type="image/png",
         size_bytes=4,
         sha256="seed",
-        path=input_path,
+        data=b"seed",
     )
 
     def resolve_input_file(file_id: str) -> InputFile | None:

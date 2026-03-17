@@ -5,7 +5,6 @@ import atexit
 import gc
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -36,7 +35,7 @@ class WaypointEngine:
         self._ctrl_cls: Any | None = None
         self._seed_frame: np.ndarray | None = None
         self._last_frame: np.ndarray | None = None
-        self._current_prompt = runtime_config.waypoint_default_prompt
+        self._current_prompt = ""
 
     async def load(self, *, warmup: bool = True) -> None:
         if self._engine is not None:
@@ -51,12 +50,6 @@ class WaypointEngine:
                 WAYPOINT_FRAME_WIDTH,
                 WAYPOINT_FRAME_HEIGHT,
                 warmup,
-            )
-            self._seed_frame = self._load_seed_frame()
-            self._logger.info(
-                "waypoint.engine.load seed_frame_ready elapsed_ms=%.1f model_source=%s",
-                (perf_counter() - start) * 1000.0,
-                self._config.waypoint_model_source,
             )
             if warmup:
                 await self._warmup()
@@ -85,15 +78,12 @@ class WaypointEngine:
             self._config.waypoint_model_source,
         )
 
-    async def start_session(self, prompt: str, initial_frame_path: Path | None = None) -> None:
+    async def start_session(self, prompt: str, seed_frame: np.ndarray | None = None) -> None:
         start = perf_counter()
         try:
-            if initial_frame_path is None:
-                await self._run_on_cuda_thread(lambda: self._reset_session_sync(prompt))
-            else:
-                await self._run_on_cuda_thread(
-                    lambda: self._set_initial_frame_sync(prompt, initial_frame_path)
-                )
+            if seed_frame is not None:
+                self._seed_frame = seed_frame
+            await self._run_on_cuda_thread(lambda: self._reset_session_sync(prompt))
         except Exception as exc:
             self._logger.error(
                 "waypoint.engine.start_session failed duration_ms=%.1f prompt_chars=%s error_type=%s",
@@ -108,10 +98,11 @@ class WaypointEngine:
             len(prompt),
         )
 
-    async def set_initial_frame(self, prompt: str, image_path: Path) -> None:
+    async def set_initial_frame(self, prompt: str, seed_frame: np.ndarray) -> None:
         start = perf_counter()
         try:
-            await self._run_on_cuda_thread(lambda: self._set_initial_frame_sync(prompt, image_path))
+            self._seed_frame = seed_frame
+            await self._run_on_cuda_thread(lambda: self._reset_session_sync(prompt))
         except Exception as exc:
             self._logger.error(
                 "waypoint.engine.set_initial_frame failed duration_ms=%.1f prompt_chars=%s error_type=%s",
@@ -162,7 +153,7 @@ class WaypointEngine:
         await self._run_on_cuda_thread(self._reset_engine_state_sync)
 
     async def _warmup(self) -> None:
-        await self._run_on_cuda_thread(lambda: self._warmup_sync(self._current_prompt))
+        await self._run_on_cuda_thread(self._warmup_sync)
 
     async def _run_on_cuda_thread(self, fn):
         loop = asyncio.get_running_loop()
@@ -248,19 +239,16 @@ class WaypointEngine:
             )
         raise RuntimeError(f"failed to load waypoint model from {model_source}") from last_error
 
-    def _reset_session_sync(self, prompt: str, seed_frame: np.ndarray | None = None) -> None:
-        engine = self._require_engine()
-        seed_frame = (
-            np.ascontiguousarray(seed_frame)
-            if seed_frame is not None
-            else self._require_seed_frame()
-        )
+    def _reset_session_sync(self, prompt: str) -> None:
         import torch
 
+        engine = self._require_engine()
+        if self._seed_frame is None:
+            raise RuntimeError("waypoint seed frame has not been set via set_initial_frame")
         engine.reset()
-        seed_tensor = torch.from_numpy(seed_frame).to(device="cuda", dtype=torch.uint8)
+        seed_tensor = torch.from_numpy(self._seed_frame).to(device="cuda", dtype=torch.uint8)
         engine.append_frame(seed_tensor)
-        self._last_frame = seed_frame
+        self._last_frame = self._seed_frame
         self._current_prompt = prompt
         if getattr(engine.model_cfg, "prompt_conditioning", None) is not None:
             engine.set_prompt(prompt)
@@ -272,15 +260,6 @@ class WaypointEngine:
             return
         engine.set_prompt(prompt)
         self._current_prompt = prompt
-
-    def _set_initial_frame_sync(self, prompt: str, image_path: Path) -> None:
-        frame = self._load_seed_image_from_path(
-            image_path,
-            width=WAYPOINT_FRAME_WIDTH,
-            height=WAYPOINT_FRAME_HEIGHT,
-        )
-        self._seed_frame = frame
-        self._reset_session_sync(prompt, seed_frame=frame)
 
     def _generate_frame_sync(self, controls: WaypointControlState) -> np.ndarray:
         import torch
@@ -308,25 +287,32 @@ class WaypointEngine:
         self._last_frame = frame_np
         return frame_np
 
-    def _warmup_sync(self, prompt: str) -> None:
+    def _warmup_sync(self) -> None:
+        import torch
+
         start = perf_counter()
-        self._reset_session_sync(prompt)
+        engine = self._require_engine()
+        warmup_frame = np.zeros((WAYPOINT_FRAME_HEIGHT, WAYPOINT_FRAME_WIDTH, 3), dtype=np.uint8)
+        engine.reset()
+        warmup_tensor = torch.from_numpy(warmup_frame).to(device="cuda", dtype=torch.uint8)
+        engine.append_frame(warmup_tensor)
+        self._last_frame = warmup_frame
+        if getattr(engine.model_cfg, "prompt_conditioning", None) is not None:
+            engine.set_prompt("")
         self._logger.info(
-            "waypoint.engine.warmup session_reset elapsed_ms=%.1f prompt_chars=%s",
+            "waypoint.engine.warmup session_reset elapsed_ms=%.1f",
             (perf_counter() - start) * 1000.0,
-            len(prompt),
         )
         self._generate_frame_sync(WaypointControlState())
         self._logger.info(
-            "waypoint.engine.warmup first_frame_generated elapsed_ms=%.1f prompt_chars=%s",
+            "waypoint.engine.warmup first_frame_generated elapsed_ms=%.1f",
             (perf_counter() - start) * 1000.0,
-            len(prompt),
         )
-        self._logger.info("waypoint warmup complete")
+        engine.reset()
+        self._last_frame = None
         self._logger.info(
-            "waypoint.engine.warmup complete duration_ms=%.1f prompt_chars=%s",
+            "waypoint.engine.warmup complete duration_ms=%.1f",
             (perf_counter() - start) * 1000.0,
-            len(prompt),
         )
 
     def _reset_engine_state_sync(self) -> None:
@@ -342,13 +328,15 @@ class WaypointEngine:
         if frame_timestamp is None or frame_timestamp < frame_limit:
             return
 
-        rollover_seed = self._last_frame if self._last_frame is not None else self._require_seed_frame()
+        self._seed_frame = self._last_frame if self._last_frame is not None else self._seed_frame
+        if self._seed_frame is None:
+            raise RuntimeError("waypoint seed frame has not been set via set_initial_frame")
         self._logger.warning(
             "waypoint.engine.generate_frame frame_history_limit_reached frame_timestamp=%s frame_limit=%s",
             frame_timestamp,
             frame_limit,
         )
-        self._reset_session_sync(self._current_prompt, seed_frame=rollover_seed)
+        self._reset_session_sync(self._current_prompt)
 
     def _frame_history_limit_sync(self) -> int | None:
         engine = self._require_engine()
@@ -375,37 +363,6 @@ class WaypointEngine:
             except Exception:
                 return None
 
-    def _load_seed_frame(self) -> np.ndarray:
-        start = perf_counter()
-        height = WAYPOINT_FRAME_HEIGHT
-        width = WAYPOINT_FRAME_WIDTH
-        seed_path = self._config.waypoint_seed_image
-        if seed_path is not None:
-            frame = self._load_seed_image_from_path(seed_path, width=width, height=height)
-            self._logger.info(
-                "waypoint.engine.load_seed_frame complete duration_ms=%.1f source=file seed_path=%s",
-                (perf_counter() - start) * 1000.0,
-                seed_path,
-            )
-            return frame
-        frame = _default_seed_frame(width=width, height=height)
-        self._logger.info(
-            "waypoint.engine.load_seed_frame complete duration_ms=%.1f source=generated_default",
-            (perf_counter() - start) * 1000.0,
-        )
-        return frame
-
-    @staticmethod
-    def _load_seed_image_from_path(path: Path, *, width: int, height: int) -> np.ndarray:
-        if not path.exists():
-            raise FileNotFoundError(f"waypoint seed image not found: {path}")
-        from PIL import Image
-
-        image = Image.open(path).convert("RGB")
-        if image.size != (width, height):
-            image = image.resize((width, height), Image.Resampling.BILINEAR)
-        return np.ascontiguousarray(np.asarray(image, dtype=np.uint8))
-
     def _build_ctrl_input(self, controls: WaypointControlState):
         ctrl_cls = self._ctrl_cls
         if ctrl_cls is None:
@@ -420,11 +377,6 @@ class WaypointEngine:
         if self._engine is None:
             raise RuntimeError("waypoint engine has not been loaded")
         return self._engine
-
-    def _require_seed_frame(self) -> np.ndarray:
-        if self._seed_frame is None:
-            raise RuntimeError("waypoint seed frame has not been initialized")
-        return self._seed_frame
 
     @staticmethod
     def _cleanup_cuda_sync() -> None:
@@ -448,33 +400,6 @@ class WaypointEngine:
             torch.cuda.ipc_collect()
         except Exception:
             pass
-
-
-def _default_seed_frame(*, width: int, height: int) -> np.ndarray:
-    frame = np.zeros((height, width, 3), dtype=np.uint8)
-    horizon = max(height // 2, 1)
-
-    for row in range(horizon):
-        t = row / max(horizon - 1, 1)
-        frame[row, :, 0] = np.uint8(30 + 45 * t)
-        frame[row, :, 1] = np.uint8(80 + 70 * t)
-        frame[row, :, 2] = np.uint8(135 + 90 * t)
-
-    for row in range(horizon, height):
-        t = (row - horizon) / max(height - horizon - 1, 1)
-        frame[row, :, 0] = np.uint8(18 + 24 * t)
-        frame[row, :, 1] = np.uint8(82 + 36 * t)
-        frame[row, :, 2] = np.uint8(22 + 18 * t)
-
-    path_half_width = max(width // 14, 8)
-    for row in range(horizon, height):
-        spread = int((row - horizon) * (width / max(height, 1)) * 0.18)
-        center = width // 2
-        left = max(center - path_half_width - spread, 0)
-        right = min(center + path_half_width + spread, width)
-        frame[row, left:right, :] = np.array([110, 95, 78], dtype=np.uint8)
-
-    return frame
 
 
 def _shutdown_executor(executor: ThreadPoolExecutor) -> None:

@@ -7,8 +7,6 @@ import hmac
 import inspect
 import json
 import logging
-import shutil
-import tempfile
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -257,7 +255,6 @@ class _RealLiveKitTransport:
         self._latest_upload_by_slot: dict[InputFileSlot, str] = {}
         self._active_upload_by_slot: dict[InputFileSlot, str] = {}
         self._upload_tasks: set[asyncio.Task[None]] = set()
-        self._upload_dir: Path | None = None
         self._status_sender: StatusSender | None = None
 
     def set_status_sender(self, sender: StatusSender | None) -> None:
@@ -267,7 +264,6 @@ class _RealLiveKitTransport:
         rtc = _load_livekit_rtc()
         self._control_topic = assignment.control_topic
         self._outputs = {output.name: output for output in outputs}
-        self._upload_dir = Path(tempfile.mkdtemp(prefix=f"lucid-upload-{assignment.session_id}-"))
         self._room = rtc.Room()
 
         @self._room.on("data_received")
@@ -340,7 +336,10 @@ class _RealLiveKitTransport:
         self._audio_sources.clear()
         self._outputs.clear()
         self._control_queue = asyncio.Queue()
-        self._cleanup_input_files()
+        self._input_files.clear()
+        self._input_file_slots.clear()
+        self._latest_upload_by_slot.clear()
+        self._active_upload_by_slot.clear()
 
     async def publish_video(self, output_name: str, frame: np.ndarray) -> None:
         source = self._video_sources.get(output_name)
@@ -443,18 +442,15 @@ class _RealLiveKitTransport:
                 stream_id,
             )
             return
-        upload_path = self._build_upload_path(
-            stream_id=stream_id,
-            filename=str(getattr(info, "name", "upload.bin") or "upload.bin"),
-        )
+        chunks: list[bytes] = []
         total_size = 0
         digest = hashlib.sha256()
         try:
-            with upload_path.open("wb") as handle:
-                async for chunk in reader:
-                    handle.write(chunk)
-                    total_size += len(chunk)
-                    digest.update(chunk)
+            async for chunk in reader:
+                chunk = bytes(chunk)
+                chunks.append(chunk)
+                total_size += len(chunk)
+                digest.update(chunk)
             expected_size = getattr(info, "size", None)
             if expected_size is not None and int(expected_size) != total_size:
                 raise ValueError(f"size mismatch for {stream_id}: {total_size} != {expected_size}")
@@ -472,28 +468,19 @@ class _RealLiveKitTransport:
                 mime_type=str(getattr(info, "mime_type", "application/octet-stream") or "application/octet-stream"),
                 size_bytes=total_size,
                 sha256=actual_sha256,
-                path=upload_path,
+                data=b"".join(chunks),
             )
             self._input_file_slots[stream_id] = slot
             self._latest_upload_by_slot[slot] = stream_id
             await self._emit_upload_status("upload_ready", {"upload_id": stream_id})
         except asyncio.CancelledError:
-            self._delete_path(upload_path)
             raise
         except Exception:
-            self._delete_path(upload_path)
             self._logger.warning("failed staging input file stream_id=%s", stream_id, exc_info=True)
             await self._emit_upload_status(
                 "upload_error",
                 {"upload_id": stream_id, "error_code": "UPLOAD_FAILED"},
             )
-
-    def _build_upload_path(self, *, stream_id: str, filename: str) -> Path:
-        base = self._upload_dir
-        if base is None:
-            raise LiveKitUnavailableError("livekit upload directory is not initialized")
-        safe_name = Path(filename).name or "upload.bin"
-        return base / f"{stream_id}-{safe_name}"
 
     async def _emit_upload_status(self, message_type: str, payload: StatusPayload) -> None:
         if self._status_sender is None:
@@ -503,30 +490,14 @@ class _RealLiveKitTransport:
         except Exception:
             self._logger.warning("failed sending upload status message_type=%s", message_type, exc_info=True)
 
-    def _cleanup_input_files(self) -> None:
-        for file_id in tuple(self._input_files):
-            self._drop_input_file(file_id)
-        if self._upload_dir is not None:
-            shutil.rmtree(self._upload_dir, ignore_errors=True)
-            self._upload_dir = None
-
     def _drop_input_file(self, file_id: str) -> None:
-        input_file = self._input_files.pop(file_id, None)
+        self._input_files.pop(file_id, None)
         slot = self._input_file_slots.pop(file_id, None)
         if slot is not None:
             if self._latest_upload_by_slot.get(slot) == file_id:
                 self._latest_upload_by_slot.pop(slot, None)
             if self._active_upload_by_slot.get(slot) == file_id:
                 self._active_upload_by_slot.pop(slot, None)
-        if input_file is not None:
-            self._delete_path(input_file.path)
-
-    @staticmethod
-    def _delete_path(path: Path) -> None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            return
 
 
 @dataclass(slots=True)

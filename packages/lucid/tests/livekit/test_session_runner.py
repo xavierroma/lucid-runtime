@@ -257,17 +257,13 @@ def _session_config() -> SessionConfig:
     return SessionConfig(worker_id="wm-worker-test")
 
 
-def test_transport_resolve_input_file_drops_previous_active_file(tmp_path) -> None:
+def test_transport_resolve_input_file_drops_previous_active_file() -> None:
     logger = logging.getLogger("tests.session_runner.transport")
     transport = _RealLiveKitTransport(
         livekit_url="wss://example.livekit.invalid",
         status_topic="wm.status",
         logger=logger,
     )
-    first_path = tmp_path / "first.png"
-    first_path.write_bytes(b"first")
-    second_path = tmp_path / "second.png"
-    second_path.write_bytes(b"second")
     slot = ("", "")
     transport._input_files["upload-1"] = InputFile(
         id="upload-1",
@@ -275,7 +271,7 @@ def test_transport_resolve_input_file_drops_previous_active_file(tmp_path) -> No
         mime_type="image/png",
         size_bytes=5,
         sha256="first",
-        path=first_path,
+        data=b"first",
     )
     transport._input_file_slots["upload-1"] = slot
     transport._active_upload_by_slot[slot] = "upload-1"
@@ -286,7 +282,7 @@ def test_transport_resolve_input_file_drops_previous_active_file(tmp_path) -> No
         mime_type="image/png",
         size_bytes=6,
         sha256="second",
-        path=second_path,
+        data=b"second",
     )
     transport._input_file_slots["upload-2"] = slot
 
@@ -295,8 +291,7 @@ def test_transport_resolve_input_file_drops_previous_active_file(tmp_path) -> No
     assert resolved is not None
     assert resolved.id == "upload-2"
     assert "upload-1" not in transport._input_files
-    assert not first_path.exists()
-    assert second_path.exists()
+    assert "upload-2" in transport._input_files
 
 
 def _lifecycle_names(reporter: StubLifecycleReporter, session_id: str) -> list[str]:

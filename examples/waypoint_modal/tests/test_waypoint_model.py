@@ -12,7 +12,7 @@ import pytest
 
 from lucid import InputFile, LoadContext, SessionContext, build_model_definition
 
-from waypoint_modal_example.config import WaypointRuntimeConfig
+from waypoint_modal_example.config import WAYPOINT_FRAME_HEIGHT, WAYPOINT_FRAME_WIDTH, WaypointRuntimeConfig
 from waypoint_modal_example.engine import WaypointControlState, WaypointEngine
 from waypoint_modal_example.model import WaypointLucidModel
 
@@ -21,9 +21,9 @@ class _StubEngine:
     def __init__(self) -> None:
         self.prompt = ""
         self.start_prompts: list[str] = []
-        self.start_initial_frames: list[Path | None] = []
+        self.start_seed_frames: list[np.ndarray | None] = []
         self.updated_prompts: list[str] = []
-        self.initial_frame_updates: list[tuple[str, Path]] = []
+        self.seed_frame_updates: list[tuple[str, np.ndarray]] = []
         self.controls: list[WaypointControlState] = []
         self.generate_calls = 0
         self.end_calls = 0
@@ -31,18 +31,18 @@ class _StubEngine:
     async def load(self) -> None:
         return None
 
-    async def start_session(self, prompt: str, initial_frame_path: Path | None = None) -> None:
+    async def start_session(self, prompt: str, seed_frame: np.ndarray | None = None) -> None:
         self.prompt = prompt
         self.start_prompts.append(prompt)
-        self.start_initial_frames.append(initial_frame_path)
+        self.start_seed_frames.append(seed_frame)
 
     async def update_prompt(self, prompt: str) -> None:
         self.prompt = prompt
         self.updated_prompts.append(prompt)
 
-    async def set_initial_frame(self, prompt: str, image_path: Path) -> None:
+    async def set_initial_frame(self, prompt: str, seed_frame: np.ndarray) -> None:
         self.prompt = prompt
-        self.initial_frame_updates.append((prompt, image_path))
+        self.seed_frame_updates.append((prompt, seed_frame))
 
     async def generate_frame(self, controls: WaypointControlState) -> tuple[np.ndarray, float]:
         self.generate_calls += 1
@@ -60,8 +60,22 @@ def _runtime_config() -> WaypointRuntimeConfig:
         waypoint_model_source="/models/Waypoint-1.1-Small",
         waypoint_ae_source="/models/owl_vae_f16_c16_distill_v0_nogan",
         waypoint_prompt_encoder_source="/models/google-umt5-xl",
-        waypoint_default_prompt="old prompt",
-        waypoint_seed_image=None,
+    )
+
+
+def _stub_input_file() -> InputFile:
+    import io as _io
+    from PIL import Image as _Image
+    buf = _io.BytesIO()
+    _Image.new("RGB", (WAYPOINT_FRAME_WIDTH, WAYPOINT_FRAME_HEIGHT), color=0).save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+    return InputFile(
+        id="stub-upload",
+        filename="seed.png",
+        mime_type="image/png",
+        size_bytes=len(png_bytes),
+        sha256="stub",
+        data=png_bytes,
     )
 
 
@@ -124,6 +138,8 @@ async def test_session_persists_buttons_and_drains_transient_inputs() -> None:
         logger=logging.getLogger("tests.waypoint_model"),
     )
     session = model.create_session(ctx)
+    session.prompt = "old prompt"
+    session.set_initial_frame(_stub_input_file())
 
     await asyncio.wait_for(session.run(), timeout=1.0)
 
@@ -189,6 +205,8 @@ async def test_session_pause_stops_new_generation_until_resume() -> None:
         logger=logging.getLogger("tests.waypoint_model"),
     )
     session = model.create_session(ctx)
+    session.prompt = "old prompt"
+    session.set_initial_frame(_stub_input_file())
 
     task = asyncio.create_task(session.run())
     await asyncio.wait_for(first_frame_paused.wait(), timeout=1.0)
@@ -206,9 +224,12 @@ async def test_session_pause_stops_new_generation_until_resume() -> None:
 
 @pytest.mark.asyncio
 async def test_session_applies_initial_frame_updates_at_safe_boundary() -> None:
-    temp_dir = Path(tempfile.mkdtemp(prefix="waypoint-initial-frame-test-"))
-    seed_path = temp_dir / "seed.png"
-    seed_path.write_bytes(b"seed")
+    import io as _io
+    from PIL import Image as _Image
+    buf = _io.BytesIO()
+    _Image.new("RGB", (WAYPOINT_FRAME_WIDTH, WAYPOINT_FRAME_HEIGHT), color=(10, 20, 30)).save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
     engine = _StubEngine()
     model = _build_model(engine)
     ctx: SessionContext | None = None
@@ -218,9 +239,9 @@ async def test_session_applies_initial_frame_updates_at_safe_boundary() -> None:
         id="upload-1",
         filename="seed.png",
         mime_type="image/png",
-        size_bytes=4,
+        size_bytes=len(png_bytes),
         sha256="seed",
-        path=seed_path,
+        data=png_bytes,
     )
 
     async def publish_fn(_name: str, _payload: object, _ts_ms: int | None) -> None:
@@ -232,23 +253,24 @@ async def test_session_applies_initial_frame_updates_at_safe_boundary() -> None:
         if engine.generate_calls == 2:
             ctx.running = False
 
-    try:
-        ctx = SessionContext(
-            session_id="s1",
-            room_name="wm-s1",
-            outputs=model.outputs,
-            publish_fn=publish_fn,
-            logger=logging.getLogger("tests.waypoint_model"),
-        )
-        session = model.create_session(ctx)
+    ctx = SessionContext(
+        session_id="s1",
+        room_name="wm-s1",
+        outputs=model.outputs,
+        publish_fn=publish_fn,
+        logger=logging.getLogger("tests.waypoint_model"),
+    )
+    session = model.create_session(ctx)
+    session.prompt = "old prompt"
+    session.set_initial_frame(input_file)
 
-        await asyncio.wait_for(session.run(), timeout=1.0)
+    await asyncio.wait_for(session.run(), timeout=1.0)
 
-        assert engine.start_initial_frames == [None]
-        assert engine.initial_frame_updates == [("old prompt", seed_path)]
-    finally:
-        seed_path.unlink(missing_ok=True)
-        temp_dir.rmdir()
+    assert len(engine.start_seed_frames) == 1
+    assert engine.start_seed_frames[0].shape == (WAYPOINT_FRAME_HEIGHT, WAYPOINT_FRAME_WIDTH, 3)
+    assert len(engine.seed_frame_updates) == 1
+    assert engine.seed_frame_updates[0][0] == "old prompt"
+    assert engine.seed_frame_updates[0][1].shape == (WAYPOINT_FRAME_HEIGHT, WAYPOINT_FRAME_WIDTH, 3)
 
 
 @pytest.mark.asyncio
@@ -275,6 +297,8 @@ async def test_session_commits_compiler_cache_after_first_frame(
         logger=logging.getLogger("tests.waypoint_model"),
     )
     session = model.create_session(ctx)
+    session.prompt = "old prompt"
+    session.set_initial_frame(_stub_input_file())
 
     await asyncio.wait_for(session.run(), timeout=1.0)
 
@@ -322,11 +346,6 @@ async def test_engine_load_runs_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(engine, "_run_on_cuda_thread", immediate)
     monkeypatch.setattr(engine, "_load_engine_sync", lambda: setattr(engine, "_engine", object()))
-    monkeypatch.setattr(
-        engine,
-        "_load_seed_frame",
-        lambda: np.zeros((4, 4, 3), dtype=np.uint8),
-    )
 
     warmup_calls: list[str] = []
 
@@ -389,9 +408,9 @@ def test_engine_rolls_session_before_exceeding_frame_history(monkeypatch: pytest
 
     rollover_calls: list[tuple[str, int]] = []
 
-    def fake_reset(prompt: str, seed_frame: np.ndarray | None = None) -> None:
-        assert seed_frame is not None
-        rollover_calls.append((prompt, int(seed_frame[0, 0, 0])))
+    def fake_reset(prompt: str) -> None:
+        assert engine._seed_frame is not None
+        rollover_calls.append((prompt, int(engine._seed_frame[0, 0, 0])))
 
     monkeypatch.setattr(engine, "_reset_session_sync", fake_reset)
 

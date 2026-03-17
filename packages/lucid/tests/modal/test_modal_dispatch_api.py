@@ -33,7 +33,7 @@ class StubDispatcher(SessionDispatcher):
 
 def test_launch_returns_function_call_id() -> None:
     dispatcher = StubDispatcher()
-    app = create_dispatch_api(dispatcher, "token-1")
+    app = create_dispatch_api(dispatcher, "token-1", {})
     client = TestClient(app)
 
     response = client.post(
@@ -56,7 +56,7 @@ def test_launch_returns_function_call_id() -> None:
 
 def test_cancel_is_idempotent() -> None:
     dispatcher = StubDispatcher()
-    app = create_dispatch_api(dispatcher, "token-1")
+    app = create_dispatch_api(dispatcher, "token-1", {})
     client = TestClient(app)
 
     response = client.post(
@@ -74,7 +74,7 @@ def test_cancel_is_idempotent() -> None:
 
 def test_status_returns_dispatcher_status() -> None:
     dispatcher = StubDispatcher()
-    app = create_dispatch_api(dispatcher, "token-1")
+    app = create_dispatch_api(dispatcher, "token-1", {})
     client = TestClient(app)
 
     response = client.get(
@@ -88,7 +88,7 @@ def test_status_returns_dispatcher_status() -> None:
 
 def test_auth_rejection_for_launch_and_cancel() -> None:
     dispatcher = StubDispatcher()
-    app = create_dispatch_api(dispatcher, "token-1")
+    app = create_dispatch_api(dispatcher, "token-1", {})
     client = TestClient(app)
 
     launch = client.post(

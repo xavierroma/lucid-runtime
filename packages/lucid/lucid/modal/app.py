@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from ..controlplane import CoordinatorClient
 from ..core.runtime import ModelConfigInput
-from ..core.spec import ModelTarget, build_model_definition
+from ..core.spec import ModelTarget, build_model_definition, resolve_model_definition
 from ..livekit import (
     Assignment,
     LucidRuntime,
@@ -208,7 +208,7 @@ class SessionDispatcher(Protocol):
     def status(self, function_call_id: str) -> FunctionCallStatus: ...
 
 
-def create_dispatch_api(dispatcher: SessionDispatcher, dispatch_token: str) -> FastAPI:
+def create_dispatch_api(dispatcher: SessionDispatcher, dispatch_token: str, manifest: dict) -> FastAPI:
     app = FastAPI()
 
     def _authorize(authorization: str | None = Header(default=None)) -> None:
@@ -220,6 +220,10 @@ def create_dispatch_api(dispatcher: SessionDispatcher, dispatch_token: str) -> F
             token = authorization.removeprefix("Bearer ").strip()
         if token != expected:
             raise HTTPException(status_code=401, detail="unauthorized")
+
+    @app.get("/manifest")
+    def get_manifest(_auth: None = Depends(_authorize)) -> dict:
+        return manifest
 
     @app.post("/launch", response_model=LaunchResponse)
     def launch(payload: LaunchRequest, _auth: None = Depends(_authorize)) -> LaunchResponse:
@@ -468,9 +472,11 @@ def create_app(
     @app.function(image=image, secrets=secrets, serialized=True)
     @modal.asgi_app()
     def dispatch_api() -> FastAPI:
+        _manifest = resolve_model_definition(model).to_manifest()
         return create_dispatch_api(
             dispatcher,
             os.getenv("MODAL_DISPATCH_TOKEN", dispatch_token),
+            _manifest,
         )
 
     return ModalAppBundle(app=app, worker_cls=WarmSessionWorker, dispatcher=dispatcher)
