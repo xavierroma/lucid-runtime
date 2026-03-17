@@ -30,8 +30,8 @@ export function findInputByName(
 export function findInputsByBinding<TKind extends InputBinding["kind"]>(
   inputs: ManifestInput[] | readonly ManifestInput[],
   kind: TKind,
-) {
-  return inputs.filter(
+): Array<ManifestInput & { binding: Extract<InputBinding, { kind: TKind }> }> {
+  return Array.from(inputs).filter(
     (input): input is ManifestInput & { binding: Extract<InputBinding, { kind: TKind }> } =>
       input.binding?.kind === kind,
   )
