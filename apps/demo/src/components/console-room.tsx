@@ -18,21 +18,25 @@ import { ConnectionState, Track } from "livekit-client"
 import type { TrackReference } from "@livekit/components-react"
 
 import { demoEnv } from "@/lib/env"
-import type {
-  AxisInputBinding,
-  Capabilities,
-  HoldInputBinding,
-  ManifestInput,
-  PointerInputBinding,
-  PressInputBinding,
-  SessionRecord,
-  WheelInputBinding,
-} from "@/lib/coordinator"
+import {
+  createLiveKitTransport,
+  findInputsByBinding,
+  findInitialFrameInput,
+  findPromptInput,
+  LucidSessionClient,
+  type AxisInputBinding,
+  type Capabilities,
+  type HoldInputBinding,
+  type ManifestInput,
+  type SessionRecord,
+  type UploadFieldConfig,
+} from "@/lib/lucid"
 
 interface ConsoleRoomProps {
   session: SessionRecord | null
   token: string | null
   capabilities: Capabilities | null
+  inputFile: File | null
   promptValue: string | null
   transportControlSignal: TransportControlSignal | null
   interactionTargetRef: RefObject<HTMLElement | null>
@@ -43,17 +47,6 @@ interface ConsoleRoomProps {
   onRoomError: (message: string | null) => void
 }
 
-interface ActionEnvelope {
-  type: "action"
-  seq: number
-  ts_ms: number
-  session_id: string | null
-  payload: {
-    name: string
-    args: Record<string, unknown>
-  }
-}
-
 export type TransportControlSignalType = "pause" | "resume"
 
 export interface TransportControlSignal {
@@ -61,53 +54,9 @@ export interface TransportControlSignal {
   type: TransportControlSignalType
 }
 
-interface ControlEnvelope {
-  type: TransportControlSignalType
-  seq: number
-  ts_ms: number
-  session_id: string | null
-  payload: Record<string, never>
-}
-
 interface PointerAccumulator {
   dx: number
   dy: number
-}
-
-const encoder = new TextEncoder()
-
-function encodeInputMessage(args: {
-  name: string
-  args: Record<string, unknown>
-  seq: number
-  sessionId: string
-}) {
-  const envelope: ActionEnvelope = {
-    type: "action",
-    seq: args.seq,
-    ts_ms: Date.now(),
-    session_id: args.sessionId,
-    payload: {
-      name: args.name,
-      args: args.args,
-    },
-  }
-  return encoder.encode(JSON.stringify(envelope))
-}
-
-function encodeControlMessage(args: {
-  type: TransportControlSignalType
-  seq: number
-  sessionId: string
-}) {
-  const envelope: ControlEnvelope = {
-    type: args.type,
-    seq: args.seq,
-    ts_ms: Date.now(),
-    session_id: args.sessionId,
-    payload: {},
-  }
-  return encoder.encode(JSON.stringify(envelope))
 }
 
 function isEditableTarget(target: EventTarget | null) {
@@ -121,26 +70,6 @@ function isEditableTarget(target: EventTarget | null) {
   )
 }
 
-function findPromptInput(inputs: ManifestInput[]) {
-  const named = inputs.find((input) => input.name === "set_prompt" && !input.binding)
-  if (named) {
-    return named
-  }
-
-  return inputs.find((input) => {
-    if (input.binding) {
-      return false
-    }
-    const properties =
-      ((input.args_schema.properties as Record<string, Record<string, unknown> | undefined>) ??
-        {}) as Record<string, Record<string, unknown> | undefined>
-    const promptSchema = properties.prompt
-    return (
-      Object.keys(properties).length === 1 &&
-      promptSchema?.type === "string"
-    )
-  })
-}
 
 function isHoldActive(
   binding: HoldInputBinding,
@@ -159,10 +88,65 @@ function computeAxisValue(binding: AxisInputBinding, pressedKeys: Set<string>) {
   return positive - negative
 }
 
+function fileIdentity(file: File | null) {
+  if (!file) {
+    return null
+  }
+  return [file.name, file.size, file.lastModified, file.type].join(":")
+}
+
+function resolveUploadMimeType(file: File, upload: UploadFieldConfig) {
+  if (file.type && upload.mime_types.includes(file.type)) {
+    return file.type
+  }
+  return upload.mime_types[0] ?? file.type ?? "application/octet-stream"
+}
+
+async function prepareUploadFile(file: File, upload: UploadFieldConfig) {
+  if (
+    upload.kind !== "image" ||
+    !upload.target_width ||
+    !upload.target_height
+  ) {
+    return file
+  }
+
+  const bitmap = await createImageBitmap(file)
+  try {
+    const canvas = document.createElement("canvas")
+    canvas.width = upload.target_width
+    canvas.height = upload.target_height
+    const context = canvas.getContext("2d")
+    if (!context) {
+      return file
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    const mimeType = resolveUploadMimeType(file, upload)
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(
+        (value) => resolve(value),
+        mimeType,
+        mimeType === "image/jpeg" || mimeType === "image/webp" ? 0.92 : undefined,
+      )
+    })
+    if (!blob) {
+      return file
+    }
+    return new File([blob], file.name, {
+      type: mimeType,
+      lastModified: file.lastModified,
+    })
+  } finally {
+    bitmap.close()
+  }
+}
+
+
 export function ConsoleRoom({
   session,
   token,
   capabilities,
+  inputFile,
   promptValue,
   transportControlSignal,
   interactionTargetRef,
@@ -207,6 +191,7 @@ export function ConsoleRoom({
       <ConsoleRoomContent
         session={session}
         capabilities={capabilities}
+        inputFile={inputFile}
         promptValue={promptValue}
         transportControlSignal={transportControlSignal}
         interactionTargetRef={interactionTargetRef}
@@ -222,6 +207,7 @@ export function ConsoleRoom({
 interface ConsoleRoomContentProps {
   session: SessionRecord
   capabilities: Capabilities
+  inputFile: File | null
   promptValue: string | null
   transportControlSignal: TransportControlSignal | null
   interactionTargetRef: RefObject<HTMLElement | null>
@@ -234,6 +220,7 @@ interface ConsoleRoomContentProps {
 function ConsoleRoomContent({
   session,
   capabilities,
+  inputFile,
   promptValue,
   transportControlSignal,
   interactionTargetRef,
@@ -245,9 +232,28 @@ function ConsoleRoomContent({
   const room = useRoomContext()
   const connectionState = useConnectionState(room)
   const cameraTracks = useTracks([Track.Source.Camera]) as TrackReference[]
-  const { send } = useDataChannel(capabilities.control_topic)
-  const actionSeqRef = useRef(0)
+  const lucidSession = useMemo(
+    () =>
+      new LucidSessionClient({
+        sessionId: session.session_id,
+        capabilities: {
+          control_topic: capabilities.control_topic,
+          status_topic: capabilities.status_topic,
+        },
+        transport: createLiveKitTransport(room.localParticipant),
+      }),
+    [
+      capabilities.control_topic,
+      capabilities.status_topic,
+      room.localParticipant,
+      session.session_id,
+    ],
+  )
+  useDataChannel(capabilities.status_topic, (message) => {
+    lucidSession.handleStatusMessage(message.payload)
+  })
   const lastPromptRef = useRef<string | null>(null)
+  const lastUploadedFileKeyRef = useRef<string | null>(null)
   const resumeRequestedRef = useRef(false)
   const lastTransportControlSignalIdRef = useRef<number | null>(null)
   const pressedKeysRef = useRef(new Set<string>())
@@ -267,44 +273,28 @@ function ConsoleRoomContent({
     () => findPromptInput(capabilities.manifest.inputs),
     [capabilities.manifest.inputs],
   )
+  const initialFrameInput = useMemo(
+    () => findInitialFrameInput(capabilities.manifest.inputs),
+    [capabilities.manifest.inputs],
+  )
   const holdInputs = useMemo(
-    () =>
-      capabilities.manifest.inputs.filter(
-        (input): input is ManifestInput & { binding: HoldInputBinding } =>
-          input.binding?.kind === "hold",
-      ),
+    () => findInputsByBinding(capabilities.manifest.inputs, "hold"),
     [capabilities.manifest.inputs],
   )
   const pressInputs = useMemo(
-    () =>
-      capabilities.manifest.inputs.filter(
-        (input): input is ManifestInput & { binding: PressInputBinding } =>
-          input.binding?.kind === "press",
-      ),
+    () => findInputsByBinding(capabilities.manifest.inputs, "press"),
     [capabilities.manifest.inputs],
   )
   const axisInputs = useMemo(
-    () =>
-      capabilities.manifest.inputs.filter(
-        (input): input is ManifestInput & { binding: AxisInputBinding } =>
-          input.binding?.kind === "axis",
-      ),
+    () => findInputsByBinding(capabilities.manifest.inputs, "axis"),
     [capabilities.manifest.inputs],
   )
   const pointerInputs = useMemo(
-    () =>
-      capabilities.manifest.inputs.filter(
-        (input): input is ManifestInput & { binding: PointerInputBinding } =>
-          input.binding?.kind === "pointer",
-      ),
+    () => findInputsByBinding(capabilities.manifest.inputs, "pointer"),
     [capabilities.manifest.inputs],
   )
   const wheelInputs = useMemo(
-    () =>
-      capabilities.manifest.inputs.filter(
-        (input): input is ManifestInput & { binding: WheelInputBinding } =>
-          input.binding?.kind === "wheel",
-      ),
+    () => findInputsByBinding(capabilities.manifest.inputs, "wheel"),
     [capabilities.manifest.inputs],
   )
   const sessionCanResume = session.state === "READY"
@@ -330,36 +320,37 @@ function ConsoleRoomContent({
     )
   }, [cameraTracks, room.localParticipant.identity, videoBinding?.track_name])
 
-  const nextSequence = () => {
-    actionSeqRef.current += 1
-    return actionSeqRef.current
-  }
-
   const sendInput = async (
     name: string,
     args: Record<string, unknown>,
     reliable: boolean,
   ) => {
-    await send(
-      encodeInputMessage({
-        name,
-        args,
-        seq: nextSequence(),
-        sessionId: session.session_id,
-      }),
-      { reliable },
-    )
+    await lucidSession.sendInput(name, args, { reliable })
   }
 
   const sendControl = async (type: TransportControlSignalType) => {
-    await send(
-      encodeControlMessage({
-        type,
-        seq: nextSequence(),
-        sessionId: session.session_id,
-      }),
-      { reliable: true },
-    )
+    if (type === "pause") {
+      await lucidSession.pause()
+      return
+    }
+    await lucidSession.resume()
+  }
+
+  const publishSelectedInputFile = async (file: File) => {
+    if (!initialFrameInput) {
+      return
+    }
+    const prepared = await prepareUploadFile(file, initialFrameInput.upload)
+    if (prepared.size > initialFrameInput.upload.max_bytes) {
+      throw new Error(
+        `file exceeds ${initialFrameInput.upload.max_bytes} bytes after preprocessing`,
+      )
+    }
+    await lucidSession.sendManifestUpload(initialFrameInput, prepared, {
+      name: prepared.name,
+      mimeType: prepared.type || "application/octet-stream",
+    })
+    lastUploadedFileKeyRef.current = fileIdentity(file)
   }
 
   useEffect(() => {
@@ -367,12 +358,18 @@ function ConsoleRoomContent({
   }, [connectionState, onConnectionChange])
 
   useEffect(() => {
+    return () => {
+      lucidSession.dispose(new Error("room closed"))
+    }
+  }, [lucidSession])
+
+  useEffect(() => {
     onTrackReadyChange(Boolean(remoteTrack))
   }, [onTrackReadyChange, remoteTrack])
 
   useEffect(() => {
-    actionSeqRef.current = 0
     lastPromptRef.current = null
+    lastUploadedFileKeyRef.current = null
     resumeRequestedRef.current = false
     lastTransportControlSignalIdRef.current = null
     pressedKeysRef.current.clear()
@@ -393,6 +390,7 @@ function ConsoleRoomContent({
 
   useEffect(() => {
     const normalizedPrompt = promptValue?.trim() ?? ""
+    const currentFileKey = fileIdentity(inputFile)
     if (connectionState !== ConnectionState.Connected) {
       return
     }
@@ -415,6 +413,17 @@ function ConsoleRoomContent({
             return
           }
           lastPromptRef.current = normalizedPrompt
+        }
+        if (
+          inputFile &&
+          initialFrameInput &&
+          currentFileKey &&
+          lastUploadedFileKeyRef.current !== currentFileKey
+        ) {
+          await publishSelectedInputFile(inputFile)
+          if (cancelled) {
+            return
+          }
         }
         await sendControl("resume")
         if (!cancelled) {
@@ -441,6 +450,8 @@ function ConsoleRoomContent({
     onActionError,
     promptInput,
     promptValue,
+    inputFile,
+    initialFrameInput,
     sessionCanResume,
     session.session_id,
   ])
@@ -540,6 +551,52 @@ function ConsoleRoomContent({
     promptValue,
     session.session_id,
     sessionAcceptsLivePromptUpdates,
+  ])
+
+  useEffect(() => {
+    const currentFileKey = fileIdentity(inputFile)
+    if (!inputFile || !initialFrameInput || !currentFileKey) {
+      return
+    }
+    if (connectionState !== ConnectionState.Connected) {
+      return
+    }
+    if (!(session.state === "RUNNING" || session.state === "PAUSED")) {
+      return
+    }
+    if (lastUploadedFileKeyRef.current === currentFileKey) {
+      return
+    }
+
+    let cancelled = false
+
+    const publishInputFile = async () => {
+      try {
+        onActionError(null)
+        await publishSelectedInputFile(inputFile)
+      } catch (error) {
+        if (!cancelled) {
+          onActionError(
+            error instanceof Error
+              ? error.message
+              : "failed to publish uploaded input file",
+          )
+        }
+      }
+    }
+
+    void publishInputFile()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    connectionState,
+    inputFile,
+    onActionError,
+    session.session_id,
+    session.state,
+    initialFrameInput,
   ])
 
   useEffect(() => {
@@ -926,7 +983,6 @@ function ConsoleRoomContent({
     onActionError,
     pointerInputs,
     pressInputs,
-    send,
     session.session_id,
     sessionAcceptsPersistentInteractionMessages,
     sessionAcceptsTransientInteractionMessages,

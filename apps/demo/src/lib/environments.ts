@@ -2,6 +2,7 @@ export interface SavedEnvironment {
   id: string
   name: string
   prompt: string
+  seedImageDataUrl: string | null
   createdAt: string
   updatedAt: string
 }
@@ -22,6 +23,10 @@ function coerceEnvironment(value: unknown): SavedEnvironment | null {
   const id = typeof candidate.id === "string" ? candidate.id.trim() : ""
   const name = typeof candidate.name === "string" ? candidate.name.trim() : ""
   const prompt = typeof candidate.prompt === "string" ? candidate.prompt.trim() : ""
+  const seedImageDataUrl =
+    typeof candidate.seedImageDataUrl === "string"
+      ? candidate.seedImageDataUrl.trim()
+      : null
   const createdAt =
     typeof candidate.createdAt === "string" ? candidate.createdAt : new Date().toISOString()
   const updatedAt =
@@ -35,6 +40,7 @@ function coerceEnvironment(value: unknown): SavedEnvironment | null {
     id,
     name,
     prompt,
+    seedImageDataUrl: seedImageDataUrl || null,
     createdAt,
     updatedAt,
   }

@@ -1,5 +1,5 @@
 import { demoEnv } from "@/lib/env"
-import { CoordinatorClient } from "../../../../packages/lucid-ts/src/index.ts"
+import { CoordinatorClient } from "@/lib/lucid"
 
 export type {
   AxisInputBinding,
@@ -18,8 +18,8 @@ export type {
   SessionState,
   SupportedModel,
   WheelInputBinding,
-} from "../../../../packages/lucid-ts/src/index.ts"
-export { isTerminalSessionState } from "../../../../packages/lucid-ts/src/index.ts"
+} from "@/lib/lucid"
+export { isTerminalSessionState } from "@/lib/lucid"
 
 const coordinator = new CoordinatorClient({
   baseUrl: demoEnv.coordinatorBaseUrl,

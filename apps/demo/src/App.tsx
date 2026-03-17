@@ -6,6 +6,7 @@ import {
   EnvironmentStudio,
   type SaveEnvironmentInput,
 } from "@/components/environment-studio"
+import { Card, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -20,6 +21,7 @@ import {
   getSession,
   isTerminalSessionState,
   type Capabilities,
+  type LucidManifest,
   type SupportedModel,
   type SessionResponse,
 } from "@/lib/coordinator"
@@ -32,6 +34,15 @@ import {
   persistSelectedEnvironmentId,
   type SavedEnvironment,
 } from "@/lib/environments"
+import { lucidManifest as heliosManifest } from "@/lib/generated/lucid.helios"
+import { lucidManifest as defaultManifest } from "@/lib/generated/lucid"
+import { lucidManifest as waypointManifest } from "@/lib/generated/lucid.waypoint"
+import {
+  findInitialFrameInput,
+  findPromptInput,
+  manifestForModel,
+} from "@/lib/lucid"
+import { dataUrlToFile } from "@/lib/input-files"
 
 type DisplayTone = "off" | "warm" | "live" | "fault"
 type AppRoute = "/" | "/environments"
@@ -43,11 +54,14 @@ interface DisplayStatus {
 }
 
 const ENVIRONMENT_ROUTE: AppRoute = "/environments"
+const STATIC_MANIFESTS: Record<string, LucidManifest> = {
+  helios: heliosManifest as unknown as LucidManifest,
+  waypoint: waypointManifest as unknown as LucidManifest,
+  yume: defaultManifest as unknown as LucidManifest,
+}
 
 function hasPromptInput(capabilities: Capabilities | null) {
-  return Boolean(
-    capabilities?.manifest.inputs.find((input) => input.name === "set_prompt"),
-  )
+  return Boolean(findPromptInput(capabilities?.manifest.inputs ?? []))
 }
 
 function normalizeModelId(value: string | null | undefined) {
@@ -88,8 +102,19 @@ function sortEnvironments(environments: SavedEnvironment[]) {
   )
 }
 
+function environmentCardStyle(seedImageDataUrl: string | null | undefined) {
+  if (!seedImageDataUrl) {
+    return undefined
+  }
+
+  return {
+    backgroundImage: `url(${seedImageDataUrl})`,
+  }
+}
+
 function buildDisplayStatus(args: {
   session: SessionResponse["session"] | null
+  hasEnvironment: boolean
   modelName: string | null
   supportedModels: SupportedModel[]
   missingConfig: string[]
@@ -102,6 +127,7 @@ function buildDisplayStatus(args: {
 }): DisplayStatus {
   const {
     session,
+    hasEnvironment,
     modelName,
     supportedModels,
     missingConfig,
@@ -140,7 +166,9 @@ function buildDisplayStatus(args: {
   if (!session || session.state === "ENDED") {
     return {
       label: "OFF",
-      detail: modelName
+      detail: !hasEnvironment
+        ? "Choose or create an environment."
+        : modelName
         ? `Press power to wake ${modelLabel(modelName, supportedModels)}.`
         : "No supported models available from the coordinator.",
       tone: "off",
@@ -245,7 +273,8 @@ export function App() {
   )
   const selectedEnvironmentPrompt = selectedEnvironment?.prompt.trim() ?? ""
   const canCreateSession =
-    Boolean(selectedModel) && (!session || isTerminalSessionState(session.state))
+    Boolean(selectedModel && selectedEnvironment) &&
+    (!session || isTerminalSessionState(session.state))
   const hasActiveSession = Boolean(session && !isTerminalSessionState(session.state))
   const canToggleTransport =
     session?.state === "RUNNING" || session?.state === "PAUSED"
@@ -254,8 +283,34 @@ export function App() {
     normalizeModelId(capabilities?.manifest.model.name) ??
     selectedModel
   const promptSupported = hasPromptInput(capabilities)
+  const activeManifest = useMemo(
+    () => manifestForModel(selectedModel, capabilities?.manifest ?? null, STATIC_MANIFESTS),
+    [capabilities?.manifest, selectedModel],
+  )
+  const initialFrameInput = useMemo(
+    () => findInitialFrameInput(activeManifest?.inputs ?? []),
+    [activeManifest],
+  )
+  const activeInputFile = useMemo(() => {
+    if (!initialFrameInput || !selectedEnvironment?.seedImageDataUrl) {
+      return null
+    }
+
+    const lastModified = Date.parse(selectedEnvironment.updatedAt)
+    return dataUrlToFile(
+      selectedEnvironment.seedImageDataUrl,
+      `${selectedEnvironment.name}-seed`,
+      Number.isFinite(lastModified) ? lastModified : 0,
+    )
+  }, [
+    initialFrameInput,
+    selectedEnvironment?.name,
+    selectedEnvironment?.seedImageDataUrl,
+    selectedEnvironment?.updatedAt,
+  ])
   const status = buildDisplayStatus({
     session,
+    hasEnvironment: Boolean(selectedEnvironment),
     modelName: resolvedModel,
     supportedModels,
     missingConfig,
@@ -414,12 +469,14 @@ export function App() {
         ...existing,
         name: input.name,
         prompt: input.prompt,
+        seedImageDataUrl: input.seedImageDataUrl,
         updatedAt: timestamp,
       }
       : {
         id: createEnvironmentId(),
         name: input.name,
         prompt: input.prompt,
+        seedImageDataUrl: input.seedImageDataUrl,
         createdAt: timestamp,
         updatedAt: timestamp,
       }
@@ -450,6 +507,10 @@ export function App() {
     }
     if (!selectedModel) {
       setRequestError("No supported models available from the coordinator")
+      return
+    }
+    if (!selectedEnvironment) {
+      setRequestError("Choose an environment before starting a session")
       return
     }
 
@@ -586,6 +647,7 @@ export function App() {
                 session={session}
                 token={sessionToken}
                 capabilities={capabilities}
+                inputFile={activeInputFile}
                 promptValue={promptSupported ? selectedEnvironmentPrompt : null}
                 transportControlSignal={transportControlSignal}
                 interactionTargetRef={interactionTargetRef}
@@ -604,72 +666,40 @@ export function App() {
           </div>
 
           <div className="console-inputs">
-            <section className="environment-selector-panel">
-              <div className="environment-selector-header">
-                <div>
-                  <p className="environment-selector-kicker">Startup environment</p>
-                  <h2>
-                    {selectedEnvironment?.name ?? "Choose a saved environment"}
-                  </h2>
-                </div>
-                <button
-                  type="button"
-                  className="environment-manage-button"
-                  onClick={() => navigateTo(ENVIRONMENT_ROUTE)}
-                >
-                  Manage Worlds
-                </button>
-              </div>
-
-              {environments.length ? (
-                <>
-                  <div className="environment-select-row">
-                    <Select
-                      value={selectedEnvironmentId ?? undefined}
-                      onValueChange={setSelectedEnvironmentId}
+            {environments.length ? (
+              <section className="environment-card-grid" aria-label="Environments">
+                {environments.map((environment) => {
+                  const isSelected = environment.id === selectedEnvironmentId
+                  return (
+                    <button
+                      key={environment.id}
+                      type="button"
+                      className={`environment-card-button ${
+                        isSelected ? "environment-card-button-selected" : ""
+                      }`}
+                      onClick={() => setSelectedEnvironmentId(environment.id)}
                     >
-                      <SelectTrigger
-                        aria-label="Environment"
-                        className="h-10 w-full rounded-full px-4 text-sm shadow-none"
-                      >
-                        <SelectValue placeholder="Choose environment" />
-                      </SelectTrigger>
-                      <SelectContent
-                        align="start"
-                        position="popper"
-                        sideOffset={8}
-                        className="shadow-none"
-                      >
-                        {environments.map((environment) => (
-                          <SelectItem
-                            key={environment.id}
-                            value={environment.id}
-                            className="text-sm"
-                          >
+                      <Card className="environment-card-surface" size="sm">
+                        <div
+                          className="environment-card-media"
+                          style={environmentCardStyle(environment.seedImageDataUrl)}
+                        />
+                        <div className="environment-card-scrim" />
+                        <CardHeader className="environment-card-content">
+                          <CardTitle className="environment-card-title">
                             {environment.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="environment-preview">
-                    <p className="environment-preview-kicker">Prompt synced to the session</p>
-                    <p className="environment-preview-copy">
-                      {selectedEnvironment?.prompt}
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <div className="environment-empty-console">
-                  <p>No saved environments yet.</p>
-                  <p>
-                    Create one on the environments route, then come back here to
-                    power on a session.
-                  </p>
-                </div>
-              )}
-            </section>
+                          </CardTitle>
+                        </CardHeader>
+                      </Card>
+                    </button>
+                  )
+                })}
+              </section>
+            ) : (
+              <div className="environment-empty-console">
+                <p>No environments</p>
+              </div>
+            )}
 
             <div className="model-picker">
               <Select

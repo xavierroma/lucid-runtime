@@ -34,7 +34,7 @@ bun run dev
 
 - Open `/environments` in the demo to create saved world environments backed by browser
   `localStorage`.
-- Each environment currently stores a name plus a text prompt.
+- Each environment stores a title, a prompt, and a first-frame seed image.
 - Return to the main console and choose one saved environment before starting a session.
 
 ## Session flow
@@ -42,7 +42,8 @@ bun run dev
 - Choose a saved environment before powering the session on.
 - Press power to allocate the worker and join the room.
 - When the worker reaches `READY`, the demo sends `set_prompt` with the selected environment
-  prompt and then sends a `resume` control message.
+  prompt, sends `set_initial_frame` when the manifest exposes that image input, and only then
+  sends `resume`.
 - The worker stays in `READY` until that resume signal arrives, then transitions to `RUNNING`.
 - While `RUNNING`, the toolbar pause control sends `pause`; while `PAUSED`, it sends `resume`.
 - While `PAUSED`, prompt updates plus hold/axis inputs still flow, while press/pointer/wheel

@@ -265,6 +265,35 @@ export const lucidManifest = {
       "args_schema": {
         "additionalProperties": false,
         "properties": {
+          "image": {
+            "title": "Image",
+            "type": "string",
+            "x-lucid-upload": {
+              "kind": "image",
+              "max_bytes": 1000000,
+              "mime_types": [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+              ],
+              "target_height": 360,
+              "target_width": 640
+            }
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "title": "SetInitialFrameInputArgs",
+        "type": "object"
+      },
+      "description": "Set the initial frame used to seed Waypoint.",
+      "name": "set_initial_frame"
+    },
+    {
+      "args_schema": {
+        "additionalProperties": false,
+        "properties": {
           "prompt": {
             "minLength": 1,
             "title": "Prompt",
@@ -389,6 +418,9 @@ export interface ScrollArgs {
 export interface SecondaryFireArgs {
   "pressed": boolean
 }
+export interface SetInitialFrameArgs {
+  "image": string
+}
 export interface SetPromptArgs {
   "prompt": string
 }
@@ -407,11 +439,12 @@ export interface InputArgumentsByName {
   "right": RightArgs
   "scroll": ScrollArgs
   "secondary_fire": SecondaryFireArgs
+  "set_initial_frame": SetInitialFrameArgs
   "set_prompt": SetPromptArgs
   "sprint": SprintArgs
 }
 
-export type InputName = "backward" | "crouch" | "forward" | "jump" | "left" | "look" | "primary_fire" | "right" | "scroll" | "secondary_fire" | "set_prompt" | "sprint"
+export type InputName = "backward" | "crouch" | "forward" | "jump" | "left" | "look" | "primary_fire" | "right" | "scroll" | "secondary_fire" | "set_initial_frame" | "set_prompt" | "sprint"
 
 export interface InputEnvelope<TName extends InputName = InputName> {
   type: "action"
