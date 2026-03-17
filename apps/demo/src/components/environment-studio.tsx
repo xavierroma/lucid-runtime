@@ -1,7 +1,11 @@
-import { useMemo, useState, type ChangeEvent, type FormEvent } from "react"
-import { ArrowLeft, Plus, Trash2 } from "lucide-react"
+import { useMemo, useState, type DragEvent, type ChangeEvent, type FormEvent } from "react"
+import { ImageIcon, Plus, Trash2 } from "lucide-react"
 
-import { Card, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 import type { SavedEnvironment } from "@/lib/environments"
 import { fileToDataUrl } from "@/lib/input-files"
 
@@ -15,39 +19,35 @@ export interface SaveEnvironmentInput {
 interface EnvironmentStudioProps {
   environments: SavedEnvironment[]
   selectedEnvironmentId: string | null
-  onSelectEnvironment: (environmentId: string) => void
+  initialEditingId?: string | null
   onSaveEnvironment: (input: SaveEnvironmentInput) => SavedEnvironment
   onDeleteEnvironment: (environmentId: string) => void
-  onNavigateHome: () => void
-}
-
-function environmentCardStyle(seedImageDataUrl: string | null | undefined) {
-  if (!seedImageDataUrl) {
-    return undefined
-  }
-
-  return {
-    backgroundImage: `url(${seedImageDataUrl})`,
-  }
 }
 
 export function EnvironmentStudio({
   environments,
-  selectedEnvironmentId,
-  onSelectEnvironment,
+  initialEditingId = null,
   onSaveEnvironment,
   onDeleteEnvironment,
-  onNavigateHome,
 }: EnvironmentStudioProps) {
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [draftName, setDraftName] = useState("")
-  const [draftPrompt, setDraftPrompt] = useState("")
-  const [draftSeedImageDataUrl, setDraftSeedImageDataUrl] = useState<string | null>(null)
+  const initEnv = useMemo(
+    () => environments.find((e) => e.id === initialEditingId) ?? null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
+  const [editingId, setEditingId] = useState<string | null>(initEnv?.id ?? null)
+  const [draftName, setDraftName] = useState(initEnv?.name ?? "")
+  const [draftPrompt, setDraftPrompt] = useState(initEnv?.prompt ?? "")
+  const [draftSeedImageDataUrl, setDraftSeedImageDataUrl] = useState<string | null>(
+    initEnv?.seedImageDataUrl ?? null,
+  )
   const [draftError, setDraftError] = useState<string | null>(null)
   const [fileInputKey, setFileInputKey] = useState(0)
+  const [isDragging, setIsDragging] = useState(false)
 
   const editingEnvironment = useMemo(
-    () => environments.find((environment) => environment.id === editingId) ?? null,
+    () => environments.find((e) => e.id === editingId) ?? null,
     [editingId, environments],
   )
 
@@ -57,35 +57,45 @@ export function EnvironmentStudio({
     setDraftPrompt("")
     setDraftSeedImageDataUrl(null)
     setDraftError(null)
-    setFileInputKey((current) => current + 1)
+    setFileInputKey((k) => k + 1)
   }
 
-  const startEditing = (environment: SavedEnvironment) => {
-    setEditingId(environment.id)
-    setDraftName(environment.name)
-    setDraftPrompt(environment.prompt)
-    setDraftSeedImageDataUrl(environment.seedImageDataUrl)
-    setDraftError(null)
-    setFileInputKey((current) => current + 1)
-  }
-
-  const handleImageChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0] ?? null
-    event.currentTarget.value = ""
-
-    if (!file) {
+  const applyFile = async (file: File) => {
+    if (!file.type.startsWith("image/")) {
+      setDraftError("Please upload an image file.")
       return
     }
-
     try {
       const dataUrl = await fileToDataUrl(file)
       setDraftSeedImageDataUrl(dataUrl)
       setDraftError(null)
     } catch (error) {
-      setDraftError(
-        error instanceof Error ? error.message : "failed to read image",
-      )
+      setDraftError(error instanceof Error ? error.message : "Failed to read image.")
     }
+  }
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0] ?? null
+    event.currentTarget.value = ""
+    if (file) void applyFile(file)
+  }
+
+  const handleDragOver = (e: DragEvent<HTMLLabelElement>) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }
+
+  const handleDragLeave = (e: DragEvent<HTMLLabelElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragging(false)
+    }
+  }
+
+  const handleDrop = (e: DragEvent<HTMLLabelElement>) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (file) void applyFile(file)
   }
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -94,27 +104,11 @@ export function EnvironmentStudio({
     const name = draftName.trim()
     const prompt = draftPrompt.trim()
 
-    if (!name) {
-      setDraftError("Add a title.")
-      return
-    }
+    if (!name) { setDraftError("Add a title."); return }
+    if (!prompt) { setDraftError("Add a prompt."); return }
+    if (!draftSeedImageDataUrl) { setDraftError("Add a first frame."); return }
 
-    if (!prompt) {
-      setDraftError("Add a prompt.")
-      return
-    }
-
-    if (!draftSeedImageDataUrl) {
-      setDraftError("Add a first frame.")
-      return
-    }
-
-    const saved = onSaveEnvironment({
-      environmentId: editingId,
-      name,
-      prompt,
-      seedImageDataUrl: draftSeedImageDataUrl,
-    })
+    const saved = onSaveEnvironment({ environmentId: editingId, name, prompt, seedImageDataUrl: draftSeedImageDataUrl })
     setEditingId(saved.id)
     setDraftName(saved.name)
     setDraftPrompt(saved.prompt)
@@ -123,145 +117,104 @@ export function EnvironmentStudio({
   }
 
   const handleDelete = () => {
-    if (!editingEnvironment) {
-      return
-    }
+    if (!editingEnvironment) return
     onDeleteEnvironment(editingEnvironment.id)
     resetDraft()
   }
 
   return (
-    <main className="environment-stage">
-      <section className="environment-shell environment-shell-simple">
-        <div className="environment-toolbar">
-          <button
-            type="button"
-            className="environment-nav-button"
-            onClick={onNavigateHome}
-          >
-            <ArrowLeft className="size-4" />
-            Back
-          </button>
-          {editingEnvironment ? (
-            <button
-              type="button"
-              className="environment-secondary-button"
-              onClick={resetDraft}
-            >
+    <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="env-title">Title</Label>
+        <Input
+          id="env-title"
+          value={draftName}
+          onChange={(e) => setDraftName(e.target.value)}
+          placeholder="Low orbit dunes"
+          maxLength={80}
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="env-prompt">Prompt</Label>
+        <Textarea
+          id="env-prompt"
+          value={draftPrompt}
+          onChange={(e) => setDraftPrompt(e.target.value)}
+          placeholder="Windswept dunes at sunrise."
+          rows={5}
+          spellCheck={false}
+          className="resize-none"
+        />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label>First frame</Label>
+        <label
+          className={cn(
+            "relative flex min-h-36 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg border-2 border-dashed transition-colors",
+            isDragging
+              ? "border-ring bg-muted/50"
+              : "border-border hover:border-ring/60 hover:bg-muted/30",
+            draftSeedImageDataUrl && !isDragging && "border-solid border-border/60",
+          )}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <input
+            key={fileInputKey}
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            onChange={handleFileChange}
+          />
+          {draftSeedImageDataUrl ? (
+            <>
+              <img
+                src={draftSeedImageDataUrl}
+                alt="First frame preview"
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity hover:opacity-100">
+                <span className="text-sm font-medium text-white">Change image</span>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center gap-2 px-4 py-6 text-muted-foreground">
+              <ImageIcon className="size-7" />
+              <div className="text-center">
+                <p className="text-sm font-medium">Drop an image here</p>
+                <p className="text-xs text-muted-foreground/70">or click to browse</p>
+              </div>
+            </div>
+          )}
+        </label>
+      </div>
+
+      {draftError ? (
+        <p className="text-sm font-medium text-destructive" role="alert">
+          {draftError}
+        </p>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit">
+          {editingEnvironment ? "Save" : "Create"}
+        </Button>
+        {editingEnvironment ? (
+          <>
+            <Button type="button" variant="outline" onClick={resetDraft}>
               <Plus className="size-4" />
               New
-            </button>
-          ) : null}
-        </div>
-
-        <form className="environment-editor-simple" onSubmit={handleSubmit}>
-          <label className="environment-field">
-            <span>Title</span>
-            <input
-              value={draftName}
-              onChange={(event) => setDraftName(event.target.value)}
-              placeholder="Low orbit dunes"
-              maxLength={80}
-            />
-          </label>
-
-          <label className="environment-field">
-            <span>Prompt</span>
-            <textarea
-              value={draftPrompt}
-              onChange={(event) => setDraftPrompt(event.target.value)}
-              placeholder="Windswept dunes at sunrise."
-              rows={6}
-              spellCheck={false}
-            />
-          </label>
-
-          <div className="environment-field">
-            <span>First frame</span>
-            <label className="environment-upload-label">
-              <input
-                key={fileInputKey}
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                onChange={(event) => {
-                  void handleImageChange(event)
-                }}
-              />
-              <Card className="environment-card-surface environment-card-preview" size="sm">
-                <div
-                  className="environment-card-media"
-                  style={environmentCardStyle(draftSeedImageDataUrl)}
-                />
-                <div className="environment-card-scrim" />
-                <CardHeader className="environment-card-content">
-                  <CardTitle className="environment-card-title">
-                    {draftName.trim() || "Upload image"}
-                  </CardTitle>
-                </CardHeader>
-              </Card>
-            </label>
-          </div>
-
-          {draftError ? (
-            <p className="environment-form-error" role="alert">
-              {draftError}
-            </p>
-          ) : null}
-
-          <div className="environment-form-actions">
-            <button type="submit" className="environment-primary-button">
-              {editingEnvironment ? "Save" : "Create"}
-            </button>
-            {editingEnvironment ? (
-              <button
-                type="button"
-                className="environment-danger-button"
-                onClick={handleDelete}
-              >
-                <Trash2 className="size-4" />
-                Delete
-              </button>
-            ) : null}
-          </div>
-        </form>
-
-        {environments.length ? (
-          <section className="environment-card-grid" aria-label="Saved environments">
-            {environments.map((environment) => {
-              const isSelected = environment.id === selectedEnvironmentId
-              return (
-                <button
-                  key={environment.id}
-                  type="button"
-                  className={`environment-card-button ${
-                    isSelected ? "environment-card-button-selected" : ""
-                  }`}
-                  onClick={() => {
-                    onSelectEnvironment(environment.id)
-                    startEditing(environment)
-                  }}
-                >
-                  <Card className="environment-card-surface" size="sm">
-                    <div
-                      className="environment-card-media"
-                      style={environmentCardStyle(environment.seedImageDataUrl)}
-                    />
-                    <div className="environment-card-scrim" />
-                    <CardHeader className="environment-card-content">
-                      <CardTitle className="environment-card-title">
-                        {environment.name}
-                      </CardTitle>
-                    </CardHeader>
-                  </Card>
-                </button>
-              )
-            })}
-          </section>
-        ) : (
-          <div className="environment-empty-state">No environments</div>
-        )}
-      </section>
-    </main>
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleDelete}>
+              <Trash2 className="size-4" />
+              Delete
+            </Button>
+          </>
+        ) : null}
+      </div>
+    </form>
   )
 }

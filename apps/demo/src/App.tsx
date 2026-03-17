@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { LoaderCircle, Pause, Play, Power } from "lucide-react"
+import { LoaderCircle, Pause, Pencil, Play, Plus, Power } from "lucide-react"
 
 import { ConsoleRoom, type TransportControlSignal } from "@/components/console-room"
 import {
   EnvironmentStudio,
   type SaveEnvironmentInput,
 } from "@/components/environment-studio"
-import { Card, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Select,
   SelectContent,
@@ -25,6 +30,7 @@ import {
   type SupportedModel,
   type SessionResponse,
 } from "@/lib/coordinator"
+import { cn } from "@/lib/utils"
 import { demoEnv, getMissingConfig } from "@/lib/env"
 import {
   createEnvironmentId,
@@ -45,7 +51,6 @@ import {
 import { dataUrlToFile } from "@/lib/input-files"
 
 type DisplayTone = "off" | "warm" | "live" | "fault"
-type AppRoute = "/" | "/environments"
 
 interface DisplayStatus {
   label: string
@@ -53,7 +58,6 @@ interface DisplayStatus {
   tone: DisplayTone
 }
 
-const ENVIRONMENT_ROUTE: AppRoute = "/environments"
 const STATIC_MANIFESTS: Record<string, LucidManifest> = {
   helios: heliosManifest as unknown as LucidManifest,
   waypoint: waypointManifest as unknown as LucidManifest,
@@ -90,10 +94,6 @@ function modelLabel(modelName: string | null, models: SupportedModel[]) {
   return (
     models.find((model) => model.id === modelName)?.display_name ?? modelName
   )
-}
-
-function normalizeRoute(pathname: string): AppRoute {
-  return pathname === ENVIRONMENT_ROUTE ? ENVIRONMENT_ROUTE : "/"
 }
 
 function sortEnvironments(environments: SavedEnvironment[]) {
@@ -240,9 +240,9 @@ function buildDisplayStatus(args: {
 
 export function App() {
   const missingConfig = useMemo(() => getMissingConfig(), [])
-  const [route, setRoute] = useState<AppRoute>(() =>
-    normalizeRoute(window.location.pathname),
-  )
+  const [studioOpen, setStudioOpen] = useState(false)
+  const [studioKey, setStudioKey] = useState(0)
+  const [studioInitialId, setStudioInitialId] = useState<string | null>(null)
   const [environments, setEnvironments] = useState<SavedEnvironment[]>(() =>
     loadSavedEnvironments(),
   )
@@ -321,17 +321,6 @@ export function App() {
     roomConnected,
     trackReady,
   })
-
-  useEffect(() => {
-    const handlePopState = () => {
-      setRoute(normalizeRoute(window.location.pathname))
-    }
-
-    window.addEventListener("popstate", handlePopState)
-    return () => {
-      window.removeEventListener("popstate", handlePopState)
-    }
-  }, [])
 
   useEffect(() => {
     persistSavedEnvironments(environments)
@@ -452,13 +441,6 @@ export function App() {
     }
   }, [session?.session_id, session?.state])
 
-  const navigateTo = (nextRoute: AppRoute) => {
-    if (window.location.pathname !== nextRoute) {
-      window.history.pushState({}, "", nextRoute)
-    }
-    setRoute(nextRoute)
-  }
-
   const handleSaveEnvironment = (input: SaveEnvironmentInput) => {
     const timestamp = new Date().toISOString()
     const existing = input.environmentId
@@ -575,34 +557,79 @@ export function App() {
     })
   }
 
-  if (route === ENVIRONMENT_ROUTE) {
-    return (
-      <EnvironmentStudio
-        environments={environments}
-        selectedEnvironmentId={selectedEnvironmentId}
-        onSelectEnvironment={setSelectedEnvironmentId}
-        onSaveEnvironment={handleSaveEnvironment}
-        onDeleteEnvironment={handleDeleteEnvironment}
-        onNavigateHome={() => navigateTo("/")}
-      />
-    )
-  }
-
   return (
-    <main className="console-stage">
+    <main
+      className="console-stage"
+      style={{
+        transition: "background-color 800ms ease",
+        backgroundColor: hasActiveSession ? "var(--console-dark-bg)" : "rgba(0,0,0,0)",
+      }}
+    >
       <section
-        className="console-shell"
+        className="console-shell relative isolate flex flex-col"
         aria-label={`Lucid ${modelLabel(resolvedModel, supportedModels)} console`}
       >
-        <div className="console-body">
+        {/* Cinematic backdrop — blurred seed image or dark fallback */}
+        <div
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute -inset-4 -z-10 overflow-hidden rounded-[2.5rem] transition-opacity duration-700",
+            hasActiveSession ? "opacity-100" : "opacity-0",
+          )}
+        >
+          {selectedEnvironment?.seedImageDataUrl ? (
+            <img
+              src={selectedEnvironment.seedImageDataUrl}
+              alt=""
+              className="absolute inset-0 h-full w-full object-cover scale-110 blur-3xl brightness-[0.25]"
+            />
+          ) : (
+            <div className="absolute inset-0 bg-[var(--console-dark-bg)]" />
+          )}
+        </div>
+
+        <div
+          className="console-body"
+          style={{
+            transition: "background-color 700ms ease, border-color 700ms ease",
+            ...(hasActiveSession && {
+              backgroundColor: "rgba(10, 12, 15, 0.4)",
+              borderColor: "rgba(255, 255, 255, 0.07)",
+            }),
+          }}
+        >
           <div className="console-toolbar">
-            <button
-              type="button"
-              className="route-button"
-              onClick={() => navigateTo(ENVIRONMENT_ROUTE)}
-            >
-              Environments
-            </button>
+            <div className="toolbar-model-select">
+              <Select
+                value={selectedModel ?? undefined}
+                onValueChange={setSelectedModel}
+                disabled={
+                  hasActiveSession ||
+                  createPending ||
+                  endPending ||
+                  supportedModels.length === 0
+                }
+              >
+                <SelectTrigger
+                  aria-label="Model"
+                  className="h-10 w-full max-w-[18rem] rounded-full px-4 text-sm shadow-none sm:w-fit sm:min-w-[14rem]"
+                >
+                  <SelectValue placeholder="No models available" />
+                </SelectTrigger>
+                <SelectContent
+                  align="start"
+                  position="popper"
+                  sideOffset={8}
+                  className="shadow-none"
+                >
+                  {supportedModels.map((model) => (
+                    <SelectItem key={model.id} value={model.id} className="text-sm">
+                      {model.display_name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {canToggleTransport ? (
               <button
                 type="button"
@@ -643,6 +670,18 @@ export function App() {
             </div>
 
             <div ref={interactionTargetRef} className="console-screen">
+              {selectedEnvironment?.seedImageDataUrl && hasActiveSession && !trackReady ? (
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 scale-105 transition-opacity duration-1000"
+                  style={{
+                    backgroundImage: `url(${selectedEnvironment.seedImageDataUrl})`,
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
+                    filter: "blur(12px) brightness(0.35)",
+                  }}
+                />
+              ) : null}
               <ConsoleRoom
                 session={session}
                 token={sessionToken}
@@ -665,75 +704,101 @@ export function App() {
             </div>
           </div>
 
-          <div className="console-inputs">
-            {environments.length ? (
-              <section className="environment-card-grid" aria-label="Environments">
-                {environments.map((environment) => {
-                  const isSelected = environment.id === selectedEnvironmentId
-                  return (
-                    <button
-                      key={environment.id}
-                      type="button"
-                      className={`environment-card-button ${
-                        isSelected ? "environment-card-button-selected" : ""
-                      }`}
-                      onClick={() => setSelectedEnvironmentId(environment.id)}
-                    >
-                      <Card className="environment-card-surface" size="sm">
-                        <div
-                          className="environment-card-media"
-                          style={environmentCardStyle(environment.seedImageDataUrl)}
-                        />
-                        <div className="environment-card-scrim" />
-                        <CardHeader className="environment-card-content">
-                          <CardTitle className="environment-card-title">
-                            {environment.name}
-                          </CardTitle>
-                        </CardHeader>
-                      </Card>
-                    </button>
-                  )
-                })}
-              </section>
-            ) : (
-              <div className="environment-empty-console">
-                <p>No environments</p>
-              </div>
-            )}
+        </div>
 
-            <div className="model-picker">
-              <Select
-                value={selectedModel ?? undefined}
-                onValueChange={setSelectedModel}
-                disabled={
-                  hasActiveSession ||
-                  createPending ||
-                  endPending ||
-                  supportedModels.length === 0
-                }
+        {/* Environments card — collapses when session is active */}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows,opacity,margin-top] duration-500 ease-in-out",
+            hasActiveSession
+              ? "grid-rows-[0fr] opacity-0 pointer-events-none mt-0"
+              : "grid-rows-[1fr] opacity-100 mt-3",
+          )}
+        >
+        <div className="overflow-hidden pb-px">
+        <div className="console-body">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-extrabold uppercase tracking-widest text-[var(--console-muted)]">
+              Environments
+            </span>
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setStudioInitialId(selectedEnvironmentId)
+                  setStudioKey((k) => k + 1)
+                  setStudioOpen(true)
+                }}
+                disabled={!selectedEnvironment}
+                aria-label="Edit environment"
+                className="p-1.5 rounded-lg text-[var(--console-muted)] hover:text-[var(--console-ink)] hover:bg-black/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors cursor-pointer border-0 bg-transparent"
               >
-                <SelectTrigger
-                  aria-label="Model"
-                  className="h-10 w-full max-w-[18rem] rounded-full px-4 text-sm shadow-none sm:w-fit sm:min-w-[16rem]"
-                >
-                  <SelectValue placeholder="No models available" />
-                </SelectTrigger>
-                <SelectContent
-                  align="start"
-                  position="popper"
-                  sideOffset={8}
-                  className="shadow-none"
-                >
-                  {supportedModels.map((model) => (
-                    <SelectItem key={model.id} value={model.id} className="text-sm">
-                      {model.display_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <Pencil size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setStudioInitialId(null)
+                  setStudioKey((k) => k + 1)
+                  setStudioOpen(true)
+                }}
+                aria-label="Add environment"
+                className="p-1.5 rounded-lg text-[var(--console-muted)] hover:text-[var(--console-ink)] hover:bg-black/5 transition-colors cursor-pointer border-0 bg-transparent"
+              >
+                <Plus size={14} />
+              </button>
             </div>
           </div>
+          <div className="flex gap-2 overflow-x-auto p-1 -m-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {environments.map((environment) => {
+              const isSelected = environment.id === selectedEnvironmentId
+              return (
+                <button
+                  key={environment.id}
+                  type="button"
+                  onClick={() => setSelectedEnvironmentId(environment.id)}
+                  aria-label={`Select ${environment.name} environment`}
+                  className={cn(
+                    "relative flex-none w-24 h-16 rounded-xl overflow-hidden cursor-pointer transition-transform hover:-translate-y-px focus-visible:outline-none",
+                    isSelected && "ring-2 ring-[var(--console-teal)]",
+                  )}
+                >
+                  <div
+                    className="absolute inset-0 bg-cover bg-center bg-[var(--console-ink)]"
+                    style={environmentCardStyle(environment.seedImageDataUrl)}
+                  />
+                  <div className="absolute inset-0 bg-black/50" />
+                  <span className="absolute bottom-0 left-0 right-0 px-2 py-1 text-white text-[0.65rem] font-semibold truncate z-10 [text-shadow:0_1px_4px_rgba(0,0,0,0.6)]">
+                    {environment.name}
+                  </span>
+                </button>
+              )
+            })}
+            {!environments.length && (
+              <p className="text-sm text-[var(--console-muted)]">No environments yet</p>
+            )}
+          </div>
         </div>
+        </div>
+        </div>
+
+        <Dialog open={studioOpen} onOpenChange={setStudioOpen}>
+          <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {studioInitialId ? "Edit environment" : "New environment"}
+              </DialogTitle>
+            </DialogHeader>
+            <EnvironmentStudio
+              key={studioKey}
+              environments={environments}
+              selectedEnvironmentId={selectedEnvironmentId}
+              initialEditingId={studioInitialId}
+              onSaveEnvironment={handleSaveEnvironment}
+              onDeleteEnvironment={handleDeleteEnvironment}
+            />
+          </DialogContent>
+        </Dialog>
       </section>
     </main>
   )

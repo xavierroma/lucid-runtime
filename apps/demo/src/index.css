@@ -20,10 +20,41 @@
   --console-live: #58e08e;
   --console-warm: #ffcf5b;
   --console-fault: #ff7c6b;
+  --console-orange: #d96e35;
+  --console-slate: #404854;
+  --console-dark-bg: #0d0f11;
 }
 
 @theme inline {
   --font-sans: "Figtree Variable", sans-serif;
+
+  /* shadcn color tokens — stone light */
+  --color-background: #ffffff;
+  --color-foreground: #1c1917;
+  --color-card: #ffffff;
+  --color-card-foreground: #1c1917;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1c1917;
+  --color-primary: #1c1917;
+  --color-primary-foreground: #fafaf9;
+  --color-secondary: #f5f5f4;
+  --color-secondary-foreground: #1c1917;
+  --color-muted: #f5f5f4;
+  --color-muted-foreground: #78716c;
+  --color-accent: #f5f5f4;
+  --color-accent-foreground: #1c1917;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #fafaf9;
+  --color-border: #e7e5e4;
+  --color-input: #e7e5e4;
+  --color-ring: #1c1917;
+
+  /* shadcn radius tokens */
+  --radius: 0.5rem;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
 
 * {
@@ -40,9 +71,7 @@ body {
   margin: 0;
   font-family: var(--font-sans);
   color: var(--console-ink);
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.72), transparent 28%),
-    linear-gradient(180deg, #f4f0e6 0%, #e6dfd1 100%);
+  background: var(--console-cream);
 }
 
 button,
@@ -76,16 +105,17 @@ textarea {
   justify-content: flex-end;
 }
 
-.model-picker {
-  display: grid;
-  justify-items: start;
+.toolbar-model-select {
+  margin-right: auto;
+  display: flex;
+  align-items: center;
 }
 
 .console-screen-frame {
   position: relative;
   padding: clamp(0.7rem, 1.4vw, 1rem);
   border-radius: 1.8rem;
-  background: linear-gradient(180deg, #2c3139, #16191f);
+  background: var(--console-ink);
 }
 
 .console-screen {
@@ -93,9 +123,7 @@ textarea {
   aspect-ratio: 16 / 9;
   overflow: hidden;
   border-radius: 1.25rem;
-  background:
-    radial-gradient(circle at 50% 12%, rgba(143, 244, 200, 0.08), transparent 30%),
-    linear-gradient(180deg, #151818, #090a0a);
+  background: var(--console-screen);
   box-shadow:
     inset 0 0 0 2px rgba(255, 255, 255, 0.03),
     inset 0 0 60px rgba(0, 0, 0, 0.45);
@@ -192,7 +220,7 @@ textarea {
   border: 0;
   border-radius: 999px;
   color: white;
-  background: linear-gradient(180deg, #333a43, #171b20);
+  background: var(--console-ink);
   cursor: pointer;
   transition:
     transform 120ms ease,
@@ -214,7 +242,7 @@ textarea {
 }
 
 .power-button-on {
-  background: linear-gradient(180deg, var(--console-teal), var(--console-teal-dark));
+  background: var(--console-teal);
 }
 
 .power-icon {
@@ -237,7 +265,7 @@ textarea {
   font-size: 0.8rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  background: linear-gradient(180deg, #ee8d45, #cb5a2c);
+  background: var(--console-orange);
   cursor: pointer;
   transition:
     transform 120ms ease,
@@ -258,11 +286,11 @@ textarea {
 
 .transport-button {
   color: white;
-  background: linear-gradient(180deg, #5e6774, #303640);
+  background: var(--console-slate);
 }
 
 .transport-button-resume {
-  background: linear-gradient(180deg, var(--console-teal), var(--console-teal-dark));
+  background: var(--console-teal);
 }
 
 .transport-icon {
@@ -415,7 +443,7 @@ textarea {
 
 .environment-primary-button {
   color: white;
-  background: linear-gradient(180deg, var(--console-teal), var(--console-teal-dark));
+  background: var(--console-teal);
 }
 
 .environment-danger-button {
@@ -473,15 +501,13 @@ textarea {
 }
 
 .environment-card-media {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(0, 0, 0, 0.12)),
-    linear-gradient(135deg, rgba(45, 185, 179, 0.24), rgba(31, 37, 48, 0.5));
+  background: var(--console-ink);
   background-position: center;
   background-size: cover;
 }
 
 .environment-card-scrim {
-  background: linear-gradient(180deg, rgba(7, 9, 12, 0.04), rgba(7, 9, 12, 0.72));
+  background: rgba(7, 9, 12, 0.45);
 }
 
 .environment-card-content {
@@ -554,7 +580,7 @@ textarea {
   font-size: 0.9rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  background: linear-gradient(180deg, #aeb1b8, #979ba3);
+  background: var(--console-slate);
   cursor: pointer;
   transition:
     transform 120ms ease,
@@ -604,7 +630,7 @@ textarea {
   min-width: 2rem;
   height: 2rem;
   color: white;
-  background: linear-gradient(180deg, #262d37, #14181e);
+  background: var(--console-ink);
   cursor: pointer;
 }
 
@@ -640,9 +666,7 @@ textarea {
   width: 100%;
   aspect-ratio: 1;
   border-radius: 1.35rem;
-  background:
-    radial-gradient(circle at 50% 35%, rgba(255, 255, 255, 0.6), transparent 55%),
-    linear-gradient(180deg, rgba(31, 37, 48, 0.18), rgba(31, 37, 48, 0.08));
+  background: rgba(31, 37, 48, 0.1);
 }
 
 .dpad-button {
@@ -660,9 +684,7 @@ textarea {
   padding: 0.8rem 0.95rem;
   color: var(--console-ink);
   font-weight: 700;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.72)),
-    #fff;
+  background: var(--console-shell);
   box-shadow:
     inset 0 0 0 1px rgba(58, 49, 32, 0.09),
     0 10px 18px rgba(74, 60, 35, 0.08);
@@ -685,7 +707,7 @@ textarea {
 
 .control-button-active {
   color: white;
-  background: linear-gradient(180deg, var(--console-teal), var(--console-teal-dark));
+  background: var(--console-teal);
   box-shadow:
     inset 0 2px 0 rgba(255, 255, 255, 0.16),
     0 14px 22px rgba(21, 124, 120, 0.18);
@@ -701,9 +723,7 @@ textarea {
   min-height: 13rem;
   overflow: hidden;
   border-radius: 1.6rem;
-  background:
-    radial-gradient(circle at 50% 12%, rgba(143, 244, 200, 0.22), transparent 36%),
-    linear-gradient(180deg, #1b2028, #0e1217);
+  background: var(--console-screen);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.06),
     inset 0 -20px 40px rgba(0, 0, 0, 0.26);
@@ -757,16 +777,11 @@ textarea {
     border-radius: 1.2rem;
   }
 
-  .route-button {
-    margin-right: 0;
-  }
-
   .console-toolbar {
     flex-wrap: wrap;
     justify-content: stretch;
   }
 
-  .route-button,
   .start-button,
   .transport-button {
     flex: 1 1 12rem;
@@ -777,7 +792,7 @@ textarea {
     height: 2.35rem;
   }
 
-  .model-picker {
+  .toolbar-model-select {
     flex: 1;
   }
 
