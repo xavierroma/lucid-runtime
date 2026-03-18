@@ -31,6 +31,7 @@ import {
   type SessionRecord,
   type UploadFieldConfig,
 } from "@/lib/lucid"
+import { InputOverlay } from "@/components/input-overlay"
 
 interface ConsoleRoomProps {
   session: SessionRecord | null
@@ -989,14 +990,26 @@ function ConsoleRoomContent({
     wheelInputs,
   ])
 
+  const overlay = (
+    <InputOverlay
+      inputs={capabilities.manifest.inputs}
+      sessionState={session.state}
+    />
+  )
+
   if (!remoteTrack) {
-    return <>{fallback}</>
+    return (
+      <>
+        {fallback}
+        {overlay}
+      </>
+    )
   }
 
   return (
-    <VideoTrack
-      trackRef={remoteTrack}
-      className="console-video"
-    />
+    <>
+      <VideoTrack trackRef={remoteTrack} className="console-video" />
+      {overlay}
+    </>
   )
 }

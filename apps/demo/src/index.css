@@ -772,6 +772,129 @@ textarea {
   gap: 0.6rem;
 }
 
+/* ── Input overlay ─────────────────────────────────────────────────── */
+
+.io-overlay {
+  position: absolute;
+  bottom: 0.7rem;
+  right: 0.7rem;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+
+.io-overlay-dim .io-panel {
+  opacity: 0.45;
+}
+
+.io-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  padding: 0.55rem 0.7rem;
+  background: rgba(5, 8, 10, 0.72);
+  backdrop-filter: blur(10px) saturate(0.8);
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transition: opacity 300ms ease;
+}
+
+.io-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.io-label {
+  min-width: 3.6rem;
+  text-align: right;
+  font-size: 0.585rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.32);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.io-keys {
+  display: flex;
+  align-items: center;
+  gap: 0.18rem;
+  flex-wrap: nowrap;
+}
+
+.io-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.28rem;
+  border-radius: 0.28rem;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.63rem;
+  font-weight: 700;
+  font-family: ui-monospace, "SF Mono", monospace;
+  letter-spacing: 0;
+  line-height: 1;
+  transition:
+    background 70ms ease,
+    color 70ms ease,
+    border-color 70ms ease,
+    box-shadow 70ms ease;
+  white-space: nowrap;
+}
+
+.io-key-active {
+  background: rgba(45, 185, 179, 0.9);
+  border-color: rgba(45, 185, 179, 1);
+  border-bottom-color: rgba(21, 124, 120, 1);
+  color: #021a17;
+  box-shadow: 0 0 10px rgba(45, 185, 179, 0.55);
+}
+
+.io-axis-sep {
+  font-size: 0.6rem;
+  color: rgba(255, 255, 255, 0.2);
+  padding: 0 0.1rem;
+}
+
+.io-mouse-hint {
+  font-size: 0.61rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.38);
+  white-space: nowrap;
+}
+
+.io-toggle {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: rgba(5, 8, 10, 0.65);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.io-toggle:hover {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.1);
+}
+
 @media (max-width: 880px) {
   .console-body {
     border-radius: 1.2rem;
