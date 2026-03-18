@@ -7,9 +7,10 @@ pub mod livekit_tokens;
 pub mod modal_dispatch;
 pub mod models;
 pub mod registry;
-pub mod state;
+pub mod sessions;
+pub mod workers;
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use axum::Router;
 use tokio::{
@@ -18,61 +19,99 @@ use tokio::{
     time::{interval, Instant},
 };
 
+use capabilities::build_capabilities;
 use config::Config;
 use modal_dispatch::{HttpModalDispatchClient, ModalDispatch};
+use models::Capabilities;
 use registry::ModelBackend;
-use state::{ReconcileCommand, RuntimeState};
+use sessions::{
+    reconciler::{reconcile, ReconcileCommand},
+    store::{InMemorySessionStore, SessionStore, SessionUpdate},
+};
+use workers::store::{InMemoryWorkerStore, RegisteredWorker, WorkerStore};
 
 #[derive(Clone)]
 pub struct AppContext {
     pub config: Config,
-    pub runtime: Arc<RwLock<RuntimeState>>,
-    pub modal_dispatch_by_model: Arc<HashMap<String, Arc<dyn ModalDispatch>>>,
+    pub sessions: Arc<dyn SessionStore>,
+    pub workers: Arc<dyn WorkerStore>,
+    pub dispatchers: Arc<HashMap<String, Arc<dyn ModalDispatch>>>,
+    pub capabilities_by_model: Arc<RwLock<HashMap<String, Capabilities>>>,
 }
 
 impl AppContext {
-    pub fn new(config: Config) -> Self {
-        let runtime = RuntimeState::new();
-        let modal_dispatch_by_model = config
-            .model_registry
-            .models()
-            .iter()
-            .map(|model| {
-                let dispatch = match &model.backend {
-                    ModelBackend::Modal(backend) => Arc::new(HttpModalDispatchClient::new(
-                        backend.dispatch_base_url.clone(),
-                        backend.dispatch_token.clone(),
-                    ))
-                        as Arc<dyn ModalDispatch>,
-                };
-                (model.id.clone(), dispatch)
-            })
-            .collect::<HashMap<_, _>>();
-        Self {
-            config,
-            runtime: Arc::new(RwLock::new(runtime)),
-            modal_dispatch_by_model: Arc::new(modal_dispatch_by_model),
-        }
-    }
-
     pub fn with_modal_dispatchers(
         config: Config,
-        modal_dispatch_by_model: HashMap<String, Arc<dyn ModalDispatch>>,
+        dispatchers: HashMap<String, Arc<dyn ModalDispatch>>,
+        capabilities: HashMap<String, Capabilities>,
     ) -> Self {
-        let runtime = RuntimeState::new();
+        let workers = build_worker_store(&config);
         Self {
             config,
-            runtime: Arc::new(RwLock::new(runtime)),
-            modal_dispatch_by_model: Arc::new(modal_dispatch_by_model),
+            sessions: Arc::new(InMemorySessionStore::new()),
+            workers,
+            dispatchers: Arc::new(dispatchers),
+            capabilities_by_model: Arc::new(RwLock::new(capabilities)),
         }
     }
+}
 
-    pub fn modal_dispatch_for_model(&self, model_name: &str) -> Arc<dyn ModalDispatch> {
-        self.modal_dispatch_by_model
-            .get(model_name)
-            .unwrap_or_else(|| panic!("missing dispatcher for configured model {model_name}"))
-            .clone()
+fn build_worker_store(config: &Config) -> Arc<dyn WorkerStore> {
+    let store = InMemoryWorkerStore::new();
+    for model in config.model_registry.models() {
+        let (dispatch_base_url, dispatch_token, worker_id) = match &model.backend {
+            ModelBackend::Modal(backend) => (
+                backend.dispatch_base_url.clone(),
+                backend.dispatch_token.clone(),
+                backend.worker_id.clone(),
+            ),
+        };
+        store.save(RegisteredWorker {
+            model_id: model.id.clone(),
+            display_name: model.display_name.clone(),
+            dispatch_base_url,
+            dispatch_token,
+            worker_id,
+            timeouts: model.timeouts.clone(),
+        });
     }
+    Arc::new(store)
+}
+
+pub async fn fetch_capabilities(
+    models: &[registry::RegisteredModel],
+    dispatchers: &HashMap<String, Arc<dyn ModalDispatch>>,
+) -> Result<HashMap<String, Capabilities>, String> {
+    let mut map = HashMap::new();
+    for model in models {
+        let dispatch = dispatchers
+            .get(&model.id)
+            .expect("dispatcher must exist for every model");
+        let manifest = dispatch
+            .get_manifest()
+            .await
+            .map_err(|err| format!("failed to fetch manifest for model {}: {err}", model.id))?;
+        let caps = build_capabilities(&manifest);
+        map.insert(model.id.clone(), caps);
+    }
+    Ok(map)
+}
+
+pub fn build_dispatchers(config: &Config) -> HashMap<String, Arc<dyn ModalDispatch>> {
+    config
+        .model_registry
+        .models()
+        .iter()
+        .map(|model| {
+            let dispatch = match &model.backend {
+                ModelBackend::Modal(backend) => Arc::new(HttpModalDispatchClient::new(
+                    backend.dispatch_base_url.clone(),
+                    backend.dispatch_token.clone(),
+                )) as Arc<dyn ModalDispatch>,
+            };
+            (model.id.clone(), dispatch)
+        })
+        .collect()
 }
 
 pub fn build_router(ctx: AppContext) -> Router {
@@ -108,35 +147,38 @@ pub fn build_router(ctx: AppContext) -> Router {
 }
 
 pub async fn reconcile_runtime(ctx: &AppContext) {
-    let snapshots = {
-        let runtime = ctx.runtime.read().await;
-        runtime.non_terminal_session_snapshots()
-    };
+    let records = ctx.sessions.list_non_terminal();
 
-    if snapshots.is_empty() {
+    if records.is_empty() {
         return;
     }
 
     let mut status_queries = JoinSet::new();
-    for snapshot in snapshots {
-        let modal_dispatch = ctx.modal_dispatch_for_model(&snapshot.model_name);
+    for record in records {
+        let dispatcher = ctx.dispatchers.get(&record.model_name).cloned();
         status_queries.spawn(async move {
-            let modal_status = match modal_dispatch
-                .get_session_status(&snapshot.function_call_id)
-                .await
-            {
-                Ok(status) => Some(status),
-                Err(err) => {
+            let modal_status = match dispatcher {
+                Some(d) => match d.get_session_status(&record.function_call_id).await {
+                    Ok(status) => Some(status),
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            session_id = %record.session_id,
+                            function_call_id = %record.function_call_id,
+                            "failed to query modal status"
+                        );
+                        None
+                    }
+                },
+                None => {
                     tracing::warn!(
-                        error = %err,
-                        session_id = %snapshot.session_id,
-                        function_call_id = %snapshot.function_call_id,
-                        "failed to query modal status"
+                        model_name = %record.model_name,
+                        "no dispatcher found for session model during reconciliation"
                     );
                     None
                 }
             };
-            (snapshot, modal_status)
+            (record, modal_status)
         });
     }
 
@@ -144,23 +186,22 @@ pub async fn reconcile_runtime(ctx: &AppContext) {
     let mut commands = Vec::new();
     while let Some(result) = status_queries.join_next().await {
         match result {
-            Ok((snapshot, modal_status)) => {
-                let mut runtime = ctx.runtime.write().await;
-                let model = ctx
-                    .config
-                    .model_registry
-                    .get(&snapshot.model_name)
-                    .expect("session model should exist in registry");
-                commands.extend(runtime.reconcile_session(
-                    &snapshot.session_id,
-                    &snapshot.function_call_id,
-                    modal_status,
-                    now,
-                    Duration::from_secs(model.timeouts.startup_timeout_secs),
-                    Duration::from_secs(model.timeouts.session_max_duration_secs),
-                    Duration::from_secs(model.timeouts.session_cancel_grace_secs),
-                    Duration::from_secs(model.timeouts.worker_heartbeat_timeout_secs),
-                ));
+            Ok((record, modal_status)) => {
+                let timeouts = ctx
+                    .workers
+                    .get(&record.model_name)
+                    .map(|w| w.timeouts)
+                    .unwrap_or_else(|| registry::ModelTimeouts {
+                        startup_timeout_secs: 120,
+                        session_max_duration_secs: 3600,
+                        session_cancel_grace_secs: 30,
+                        worker_heartbeat_timeout_secs: 15,
+                    });
+                let (update, cmds) = reconcile(&record, modal_status, now, &timeouts);
+                if let Some(update) = update {
+                    let _ = ctx.sessions.update(&record.session_id, update);
+                }
+                commands.extend(cmds);
             }
             Err(err) => {
                 tracing::warn!(error = %err, "modal status query task failed");
@@ -173,7 +214,6 @@ pub async fn reconcile_runtime(ctx: &AppContext) {
 
 pub async fn run_session_reconciler(ctx: AppContext) {
     let mut ticker = interval(std::time::Duration::from_secs(1));
-
     loop {
         ticker.tick().await;
         reconcile_runtime(&ctx).await;
@@ -188,26 +228,41 @@ async fn execute_reconcile_commands(ctx: &AppContext, commands: Vec<ReconcileCom
                 model_name,
                 function_call_id,
                 force,
-            } => match ctx
-                .modal_dispatch_for_model(&model_name)
-                .cancel_session(&function_call_id, force)
-                .await
-            {
-                Ok(()) => {
-                    let mut runtime = ctx.runtime.write().await;
-                    let _ = runtime.mark_cancel_dispatched(&session_id, Instant::now(), force);
-                }
-                Err(err) => {
+            } => {
+                let Some(dispatcher) = ctx.dispatchers.get(&model_name).cloned() else {
                     tracing::warn!(
-                        error = %err,
-                        session_id = %session_id,
                         model_name = %model_name,
-                        function_call_id = %function_call_id,
-                        force,
-                        "failed to dispatch modal cancel during reconciliation"
+                        "no dispatcher for cancel command"
                     );
+                    continue;
+                };
+                match dispatcher.cancel_session(&function_call_id, force).await {
+                    Ok(()) => {
+                        let update = if force {
+                            SessionUpdate {
+                                force_cancel_dispatched_at: Some(Some(Instant::now())),
+                                ..Default::default()
+                            }
+                        } else {
+                            SessionUpdate {
+                                cancel_dispatched_at: Some(Some(Instant::now())),
+                                ..Default::default()
+                            }
+                        };
+                        let _ = ctx.sessions.update(&session_id, update);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            session_id = %session_id,
+                            model_name = %model_name,
+                            function_call_id = %function_call_id,
+                            force,
+                            "failed to dispatch modal cancel during reconciliation"
+                        );
+                    }
                 }
-            },
+            }
         }
     }
 }
@@ -246,7 +301,9 @@ mod tests {
             LaunchSessionRequest, ModalDispatch, ModalDispatchError, ModalExecutionStatus,
         },
         models::{ModelsResponse, SessionEndReason, SessionResponse, SessionState},
-        reconcile_runtime, AppContext,
+        reconcile_runtime,
+        sessions::store::{room_name_for, SessionUpdate},
+        AppContext,
     };
 
     const DEFAULT_TEST_MODEL: &str = "yume";
@@ -371,6 +428,12 @@ mod tests {
             Ok(())
         }
 
+        async fn get_manifest(&self) -> Result<serde_json::Value, ModalDispatchError> {
+            Err(ModalDispatchError::Transport(
+                "get_manifest not implemented in FakeModalDispatch".to_string(),
+            ))
+        }
+
         async fn get_session_status(
             &self,
             function_call_id: &str,
@@ -419,9 +482,11 @@ mod tests {
 
     fn test_app(fake_dispatch: Arc<FakeModalDispatch>) -> (Router, Config) {
         let config = Config::for_tests();
+        let capabilities = test_capabilities_for_registry(&config);
         let ctx = AppContext::with_modal_dispatchers(
             config.clone(),
             dispatchers_for_registry(&config, fake_dispatch, &[]),
+            capabilities,
         );
         (build_router(ctx), config)
     }
@@ -431,9 +496,11 @@ mod tests {
         overrides: &[(&str, Arc<FakeModalDispatch>)],
     ) -> (Router, Config) {
         let config = Config::for_tests();
+        let capabilities = test_capabilities_for_registry(&config);
         let ctx = AppContext::with_modal_dispatchers(
             config.clone(),
             dispatchers_for_registry(&config, default_dispatch, overrides),
+            capabilities,
         );
         (build_router(ctx), config)
     }
@@ -813,6 +880,7 @@ mod tests {
         default_dispatch.set_status_for("call-1", ModalExecutionStatus::Failure);
         helios_dispatch.set_status_for("call-2", ModalExecutionStatus::Pending);
         let config = Config::for_tests();
+        let capabilities = test_capabilities_for_registry(&config);
         let ctx = AppContext::with_modal_dispatchers(
             config.clone(),
             dispatchers_for_registry(
@@ -820,34 +888,35 @@ mod tests {
                 default_dispatch,
                 &[(HELIOS_TEST_MODEL, helios_dispatch)],
             ),
+            capabilities,
         );
         let first = Uuid::new_v4();
         let second = Uuid::new_v4();
 
-        {
-            let mut runtime = ctx.runtime.write().await;
-            runtime.create_session(
-                first,
-                DEFAULT_TEST_MODEL.to_string(),
-                "call-1".to_string(),
-                Instant::now(),
-            );
-            runtime.create_session(
-                second,
-                HELIOS_TEST_MODEL.to_string(),
-                "call-2".to_string(),
-                Instant::now(),
-            );
-        }
+        ctx.sessions.create(
+            first,
+            DEFAULT_TEST_MODEL.to_string(),
+            room_name_for(first),
+            "call-1".to_string(),
+            Instant::now(),
+        );
+        ctx.sessions.create(
+            second,
+            HELIOS_TEST_MODEL.to_string(),
+            room_name_for(second),
+            "call-2".to_string(),
+            Instant::now(),
+        );
 
         reconcile_runtime(&ctx).await;
 
-        let runtime = ctx.runtime.read().await;
-        let first_session = runtime
-            .get_session(&first)
+        let first_session = ctx
+            .sessions
+            .get(&first)
             .expect("first session should exist");
-        let second_session = runtime
-            .get_session(&second)
+        let second_session = ctx
+            .sessions
+            .get(&second)
             .expect("second session should exist");
         assert_eq!(first_session.state, SessionState::Failed);
         assert_eq!(first_session.error_code.as_deref(), Some("MODAL_FAILURE"));
@@ -863,26 +932,27 @@ mod tests {
         let (dispatch, probe) = FakeModalDispatch::with_ids_and_status_probe(&[], 2);
         let fake_dispatch = Arc::new(dispatch);
         let config = Config::for_tests();
+        let capabilities = test_capabilities_for_registry(&config);
         let ctx = AppContext::with_modal_dispatchers(
             config.clone(),
             dispatchers_for_registry(&config, fake_dispatch, &[]),
+            capabilities,
         );
 
-        {
-            let mut runtime = ctx.runtime.write().await;
-            runtime.create_session(
-                Uuid::new_v4(),
-                DEFAULT_TEST_MODEL.to_string(),
-                "call-1".to_string(),
-                Instant::now(),
-            );
-            runtime.create_session(
-                Uuid::new_v4(),
-                HELIOS_TEST_MODEL.to_string(),
-                "call-2".to_string(),
-                Instant::now(),
-            );
-        }
+        ctx.sessions.create(
+            Uuid::new_v4(),
+            DEFAULT_TEST_MODEL.to_string(),
+            "room-1".to_string(),
+            "call-1".to_string(),
+            Instant::now(),
+        );
+        ctx.sessions.create(
+            Uuid::new_v4(),
+            HELIOS_TEST_MODEL.to_string(),
+            "room-2".to_string(),
+            "call-2".to_string(),
+            Instant::now(),
+        );
 
         let reconcile_task = tokio::spawn({
             let ctx = ctx.clone();
@@ -1104,5 +1174,11 @@ mod tests {
             .await
             .expect("request should succeed");
         assert_eq!(heartbeat.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[allow(dead_code)]
+    fn _uses_session_update() {
+        // Suppress "unused import" warnings for SessionUpdate imported at the top.
+        let _ = SessionUpdate::default();
     }
 }

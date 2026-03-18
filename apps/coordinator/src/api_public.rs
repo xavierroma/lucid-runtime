@@ -10,11 +10,14 @@ use uuid::Uuid;
 use crate::{
     auth, livekit_tokens,
     modal_dispatch::LaunchSessionRequest,
-    models::{CreateSessionRequest, ErrorResponse, ModelsResponse, SessionResponse, CONTROL_TOPIC},
-    registry::ModelBackend,
-    state::EndRequestError,
+    models::{
+        CreateSessionRequest, ErrorResponse, ModelsResponse, SessionResponse, SupportedModel,
+        CONTROL_TOPIC,
+    },
+    sessions::store::{room_name_for, PendingTerminal, SessionUpdate},
     AppContext,
 };
+use crate::models::SessionEndReason;
 
 pub async fn healthz() -> StatusCode {
     StatusCode::OK
@@ -25,13 +28,18 @@ pub async fn get_models(State(ctx): State<AppContext>, headers: HeaderMap) -> Re
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
-    (
-        StatusCode::OK,
-        Json(ModelsResponse {
-            models: ctx.config.model_registry.supported_models(),
-        }),
-    )
-        .into_response()
+    let models = ctx
+        .workers
+        .list()
+        .into_iter()
+        .map(|w| SupportedModel {
+            id: w.model_id,
+            display_name: w.display_name,
+            description: None,
+        })
+        .collect();
+
+    (StatusCode::OK, Json(ModelsResponse { models })).into_response()
 }
 
 pub async fn create_session(
@@ -52,20 +60,23 @@ pub async fn create_session(
         None => return error_response(StatusCode::BAD_REQUEST, "model_name is required"),
     };
 
-    let Some(model) = ctx.config.model_registry.get(&model_name) else {
+    let Some(worker) = ctx.workers.get(&model_name) else {
         return error_response(
             StatusCode::BAD_REQUEST,
             &format!("unsupported model_name: {model_name}"),
         );
     };
 
-    let worker_id = match &model.backend {
-        ModelBackend::Modal(backend) => backend.worker_id.clone(),
+    let Some(capabilities) = ctx.capabilities_by_model.read().await.get(&model_name).cloned()
+    else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &format!("capabilities not available for model: {model_name}"),
+        );
     };
-    let capabilities = model.capabilities.clone();
 
     let session_id = Uuid::new_v4();
-    let room_name = crate::state::RuntimeState::room_name_for(session_id);
+    let room_name = room_name_for(session_id);
 
     let client_access_token = match livekit_tokens::mint_access_token(
         &ctx.config.livekit_api_key,
@@ -85,7 +96,7 @@ pub async fn create_session(
     let worker_access_token = match livekit_tokens::mint_access_token(
         &ctx.config.livekit_api_key,
         &ctx.config.livekit_api_secret,
-        &worker_id,
+        &worker.worker_id,
         &room_name,
     ) {
         Ok(token) => token,
@@ -97,12 +108,18 @@ pub async fn create_session(
         }
     };
 
-    let function_call_id = match ctx
-        .modal_dispatch_for_model(&model_name)
+    let Some(dispatcher) = ctx.dispatchers.get(&model_name).cloned() else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &format!("no dispatcher available for model: {model_name}"),
+        );
+    };
+
+    let function_call_id = match dispatcher
         .launch_session(LaunchSessionRequest {
             session_id,
             room_name: room_name.clone(),
-            worker_id,
+            worker_id: worker.worker_id,
             worker_access_token,
             control_topic: CONTROL_TOPIC.to_string(),
             coordinator_base_url: ctx.config.callback_base_url.clone(),
@@ -125,10 +142,9 @@ pub async fn create_session(
         }
     };
 
-    let session = {
-        let mut runtime = ctx.runtime.write().await;
-        runtime.create_session(session_id, model_name, function_call_id, Instant::now())
-    };
+    let session = ctx
+        .sessions
+        .create(session_id, model_name, room_name, function_call_id, Instant::now());
 
     (
         StatusCode::ACCEPTED,
@@ -154,13 +170,11 @@ pub async fn get_session(
         return error_response(StatusCode::NOT_FOUND, "session not found");
     };
 
-    let runtime = ctx.runtime.read().await;
-    let Some(session) = runtime.get_session(&session_id) else {
+    let Some(session) = ctx.sessions.get(&session_id) else {
         return error_response(StatusCode::NOT_FOUND, "session not found");
     };
-    drop(runtime);
 
-    let Some(model) = ctx.config.model_registry.get(&session.model_name) else {
+    if ctx.workers.get(&session.model_name).is_none() {
         tracing::error!(
             session_id = %session.session_id,
             model_name = %session.model_name,
@@ -170,6 +184,19 @@ pub async fn get_session(
             StatusCode::INTERNAL_SERVER_ERROR,
             "session references unknown model",
         );
+    }
+
+    let Some(capabilities) = ctx
+        .capabilities_by_model
+        .read()
+        .await
+        .get(&session.model_name)
+        .cloned()
+    else {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &format!("capabilities not available for model: {}", session.model_name),
+        );
     };
 
     (
@@ -177,7 +204,7 @@ pub async fn get_session(
         Json(SessionResponse {
             session,
             client_access_token: None,
-            capabilities: model.capabilities.clone(),
+            capabilities,
         }),
     )
         .into_response()
@@ -196,34 +223,50 @@ pub async fn end_session(
         return error_response(StatusCode::NOT_FOUND, "session not found");
     };
 
-    let end_result = {
-        let mut runtime = ctx.runtime.write().await;
-        runtime.request_end_session(&session_id, Instant::now())
+    let Some(record) = ctx.sessions.get_record(&session_id) else {
+        return error_response(StatusCode::NOT_FOUND, "session not found");
     };
 
-    let end_result = match end_result {
-        Ok(end_result) => end_result,
-        Err(EndRequestError::NotFound) => {
-            return error_response(StatusCode::NOT_FOUND, "session not found")
+    // If already terminal or canceling, this is a no-op.
+    if record.state.is_terminal() || record.state == crate::models::SessionState::Canceling {
+        return StatusCode::OK.into_response();
+    }
+
+    let function_call_id = record.function_call_id.clone();
+    let model_name = record.model_name.clone();
+
+    let update = SessionUpdate::begin_canceling(
+        PendingTerminal::ended(SessionEndReason::ClientRequested),
+        Instant::now(),
+    );
+    match ctx.sessions.update(&session_id, update) {
+        Ok(_) => {}
+        Err(_) => {
+            // Race: session was already terminal/canceling. Treat as success.
+            return StatusCode::OK.into_response();
         }
-    };
+    }
 
-    if let Some(function_call_id) = end_result.function_call_id {
-        if let Err(err) = ctx
-            .modal_dispatch_for_model(&end_result.model_name)
-            .cancel_session(&function_call_id, false)
-            .await
-        {
-            tracing::warn!(
-                error = %err,
-                session_id = %session_id,
-                model_name = %end_result.model_name,
-                function_call_id = %function_call_id,
-                "failed to cancel modal function call"
-            );
-        } else {
-            let mut runtime = ctx.runtime.write().await;
-            let _ = runtime.mark_cancel_dispatched(&session_id, Instant::now(), false);
+    if let Some(dispatcher) = ctx.dispatchers.get(&model_name).cloned() {
+        match dispatcher.cancel_session(&function_call_id, false).await {
+            Ok(()) => {
+                let _ = ctx.sessions.update(
+                    &session_id,
+                    SessionUpdate {
+                        cancel_dispatched_at: Some(Some(Instant::now())),
+                        ..Default::default()
+                    },
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    session_id = %session_id,
+                    model_name = %model_name,
+                    function_call_id = %function_call_id,
+                    "failed to cancel modal function call"
+                );
+            }
         }
     }
 

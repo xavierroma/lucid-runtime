@@ -9,10 +9,44 @@ use uuid::Uuid;
 
 use crate::{
     auth,
-    models::{ErrorResponse, RuntimeEndedRequest},
-    state::SessionTransitionError,
+    models::{ErrorResponse, RuntimeEndedRequest, SessionEndReason, SessionState},
+    sessions::store::{SessionUpdate, UpdateError},
     AppContext,
 };
+
+pub async fn mark_ready(
+    State(ctx): State<AppContext>,
+    headers: HeaderMap,
+    Path(session_id): Path<Uuid>,
+) -> Response {
+    if !auth::is_bearer_authorized(&headers, &ctx.config.worker_internal_token) {
+        return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+
+    // No-op when the session is already being cancelled or is terminal.
+    if let Some(session) = ctx.sessions.get(&session_id) {
+        if session.state == SessionState::Canceling || session.state.is_terminal() {
+            return StatusCode::OK.into_response();
+        }
+    }
+
+    let now = Instant::now();
+    match ctx.sessions.update(
+        &session_id,
+        SessionUpdate {
+            state: Some(SessionState::Ready),
+            ready_at: Some(now),
+            last_heartbeat_at: Some(now),
+            ..Default::default()
+        },
+    ) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(UpdateError::NotFound) => error_response(StatusCode::NOT_FOUND, "session not found"),
+        Err(UpdateError::InvalidTransition) => {
+            error_response(StatusCode::CONFLICT, "invalid session transition")
+        }
+    }
+}
 
 pub async fn mark_running(
     State(ctx): State<AppContext>,
@@ -23,13 +57,25 @@ pub async fn mark_running(
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
-    let mut runtime = ctx.runtime.write().await;
-    match runtime.mark_running(&session_id, Instant::now()) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(SessionTransitionError::NotFound) => {
-            error_response(StatusCode::NOT_FOUND, "session not found")
+    if let Some(session) = ctx.sessions.get(&session_id) {
+        if session.state == SessionState::Canceling || session.state.is_terminal() {
+            return StatusCode::OK.into_response();
         }
-        Err(SessionTransitionError::InvalidState) => {
+    }
+
+    let now = Instant::now();
+    match ctx.sessions.update(
+        &session_id,
+        SessionUpdate {
+            state: Some(SessionState::Running),
+            running_at: Some(now),
+            last_heartbeat_at: Some(now),
+            ..Default::default()
+        },
+    ) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(UpdateError::NotFound) => error_response(StatusCode::NOT_FOUND, "session not found"),
+        Err(UpdateError::InvalidTransition) => {
             error_response(StatusCode::CONFLICT, "invalid session transition")
         }
     }
@@ -44,34 +90,24 @@ pub async fn mark_paused(
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
-    let mut runtime = ctx.runtime.write().await;
-    match runtime.mark_paused(&session_id, Instant::now()) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(SessionTransitionError::NotFound) => {
-            error_response(StatusCode::NOT_FOUND, "session not found")
-        }
-        Err(SessionTransitionError::InvalidState) => {
-            error_response(StatusCode::CONFLICT, "invalid session transition")
+    if let Some(session) = ctx.sessions.get(&session_id) {
+        if session.state == SessionState::Canceling || session.state.is_terminal() {
+            return StatusCode::OK.into_response();
         }
     }
-}
 
-pub async fn mark_ready(
-    State(ctx): State<AppContext>,
-    headers: HeaderMap,
-    Path(session_id): Path<Uuid>,
-) -> Response {
-    if !auth::is_bearer_authorized(&headers, &ctx.config.worker_internal_token) {
-        return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
-    }
-
-    let mut runtime = ctx.runtime.write().await;
-    match runtime.mark_ready(&session_id, Instant::now()) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(SessionTransitionError::NotFound) => {
-            error_response(StatusCode::NOT_FOUND, "session not found")
-        }
-        Err(SessionTransitionError::InvalidState) => {
+    let now = Instant::now();
+    match ctx.sessions.update(
+        &session_id,
+        SessionUpdate {
+            state: Some(SessionState::Paused),
+            last_heartbeat_at: Some(now),
+            ..Default::default()
+        },
+    ) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(UpdateError::NotFound) => error_response(StatusCode::NOT_FOUND, "session not found"),
+        Err(UpdateError::InvalidTransition) => {
             error_response(StatusCode::CONFLICT, "invalid session transition")
         }
     }
@@ -86,13 +122,16 @@ pub async fn mark_heartbeat(
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
-    let mut runtime = ctx.runtime.write().await;
-    match runtime.mark_heartbeat(&session_id, Instant::now()) {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(SessionTransitionError::NotFound) => {
-            error_response(StatusCode::NOT_FOUND, "session not found")
-        }
-        Err(SessionTransitionError::InvalidState) => {
+    match ctx.sessions.update(
+        &session_id,
+        SessionUpdate {
+            last_heartbeat_at: Some(Instant::now()),
+            ..Default::default()
+        },
+    ) {
+        Ok(_) => StatusCode::OK.into_response(),
+        Err(UpdateError::NotFound) => error_response(StatusCode::NOT_FOUND, "session not found"),
+        Err(UpdateError::InvalidTransition) => {
             error_response(StatusCode::CONFLICT, "invalid session transition")
         }
     }
@@ -108,13 +147,39 @@ pub async fn mark_ended(
         return error_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
 
-    let mut runtime = ctx.runtime.write().await;
-    let ended = runtime.mark_ended(&session_id, payload.error_code, payload.end_reason);
-    if !ended {
+    let Some(record) = ctx.sessions.get_record(&session_id) else {
         return error_response(StatusCode::NOT_FOUND, "session not found");
-    }
+    };
 
-    StatusCode::OK.into_response()
+    // Compute the terminal state, respecting any pending disposition set by a
+    // cancel request.
+    let (state, error_code, end_reason) = if let Some(error_code) = payload.error_code {
+        (
+            SessionState::Failed,
+            Some(error_code),
+            Some(payload.end_reason.unwrap_or(SessionEndReason::WorkerReportedError)),
+        )
+    } else if let Some(pending) = record.pending_terminal {
+        (
+            pending.state,
+            pending.error_code,
+            Some(payload.end_reason.unwrap_or(pending.end_reason)),
+        )
+    } else {
+        (
+            SessionState::Ended,
+            None,
+            Some(payload.end_reason.unwrap_or(SessionEndReason::NormalCompletion)),
+        )
+    };
+
+    match ctx
+        .sessions
+        .update(&session_id, SessionUpdate::finish(state, error_code, end_reason))
+    {
+        Ok(_) | Err(UpdateError::InvalidTransition) => StatusCode::OK.into_response(),
+        Err(UpdateError::NotFound) => error_response(StatusCode::NOT_FOUND, "session not found"),
+    }
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response {

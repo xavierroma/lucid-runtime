@@ -1,17 +1,9 @@
-use std::{
-    collections::HashSet,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashSet, fs, path::Path};
 
 use serde::Deserialize;
-use serde_json::Value;
 use thiserror::Error;
 
-use crate::{
-    capabilities,
-    models::{Capabilities, SupportedModel},
-};
+use crate::models::SupportedModel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelTimeouts {
@@ -37,8 +29,6 @@ pub enum ModelBackend {
 pub struct RegisteredModel {
     pub id: String,
     pub display_name: String,
-    pub description: Option<String>,
-    pub capabilities: Capabilities,
     pub backend: ModelBackend,
     pub timeouts: ModelTimeouts,
 }
@@ -62,8 +52,6 @@ pub enum RegistryError {
     EmptyModelId,
     #[error("display_name cannot be empty for model {0}")]
     EmptyDisplayName(String),
-    #[error("{0}")]
-    Manifest(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,7 +63,6 @@ struct ModelsFile {
 struct ModelFileEntry {
     id: String,
     display_name: String,
-    manifest_path: String,
     backend: BackendFileEntry,
     timeouts: TimeoutsFileEntry,
 }
@@ -113,14 +100,13 @@ impl ModelRegistry {
         Self::from_file_entries(parsed, path)
     }
 
-    fn from_file_entries(parsed: ModelsFile, source_path: &Path) -> Result<Self, RegistryError> {
+    fn from_file_entries(parsed: ModelsFile, _source_path: &Path) -> Result<Self, RegistryError> {
         if parsed.models.is_empty() {
             return Err(RegistryError::EmptyModels);
         }
 
         let mut seen_ids = HashSet::new();
         let mut models = Vec::with_capacity(parsed.models.len());
-        let base_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
 
         for entry in parsed.models {
             let id = entry.id.trim().to_lowercase();
@@ -135,16 +121,6 @@ impl ModelRegistry {
             if display_name.is_empty() {
                 return Err(RegistryError::EmptyDisplayName(id));
             }
-
-            let manifest_path = resolve_path(base_dir, &entry.manifest_path);
-            let manifest = capabilities::load_manifest_from_path(&manifest_path)
-                .map_err(RegistryError::Manifest)?;
-            let capabilities = capabilities::build_capabilities(&manifest);
-            let description = manifest
-                .get("model")
-                .and_then(|model| model.get("description"))
-                .and_then(Value::as_str)
-                .map(|value| value.to_string());
 
             let backend = match entry.backend {
                 BackendFileEntry::Modal {
@@ -161,8 +137,6 @@ impl ModelRegistry {
             models.push(RegisteredModel {
                 id,
                 display_name,
-                description,
-                capabilities,
                 backend,
                 timeouts: ModelTimeouts {
                     startup_timeout_secs: entry.timeouts.startup_timeout_secs,
@@ -190,91 +164,61 @@ impl ModelRegistry {
             .map(|model| SupportedModel {
                 id: model.id.clone(),
                 display_name: model.display_name.clone(),
-                description: model.description.clone(),
+                description: None,
             })
             .collect()
     }
 
     pub fn for_tests() -> Self {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifests_dir = root.join("packages/contracts/generated");
-        let dir = std::env::temp_dir().join(format!(
-            "lucid-coordinator-registry-{}",
-            uuid::Uuid::new_v4()
-        ));
-        fs::create_dir_all(&dir).expect("test registry dir should create");
-        let source = dir.join("coordinator.models.json");
-        let contents = format!(
-            r#"{{
-  "models": [
-    {{
-      "id": "yume",
-      "display_name": "Yume",
-      "manifest_path": "{}",
-      "backend": {{
-        "kind": "modal",
-        "dispatch_base_url": "https://yume.modal.test",
-        "dispatch_token": "token-yume",
-        "worker_id": "wm-yume"
-      }},
-      "timeouts": {{
-        "startup_timeout_secs": 120,
-        "session_max_duration_secs": 3600,
-        "session_cancel_grace_secs": 30,
-        "worker_heartbeat_timeout_secs": 15
-      }}
-    }},
-    {{
-      "id": "waypoint",
-      "display_name": "Waypoint",
-      "manifest_path": "{}",
-      "backend": {{
-        "kind": "modal",
-        "dispatch_base_url": "https://waypoint.modal.test",
-        "dispatch_token": "token-waypoint",
-        "worker_id": "wm-waypoint"
-      }},
-      "timeouts": {{
-        "startup_timeout_secs": 900,
-        "session_max_duration_secs": 3600,
-        "session_cancel_grace_secs": 30,
-        "worker_heartbeat_timeout_secs": 15
-      }}
-    }},
-    {{
-      "id": "helios",
-      "display_name": "Helios (Distilled)",
-      "manifest_path": "{}",
-      "backend": {{
-        "kind": "modal",
-        "dispatch_base_url": "https://helios.modal.test",
-        "dispatch_token": "token-helios",
-        "worker_id": "wm-helios"
-      }},
-      "timeouts": {{
-        "startup_timeout_secs": 900,
-        "session_max_duration_secs": 3600,
-        "session_cancel_grace_secs": 30,
-        "worker_heartbeat_timeout_secs": 15
-      }}
-    }}
-  ]
-}}"#,
-            manifests_dir.join("lucid_manifest.json").display(),
-            manifests_dir.join("lucid_manifest.waypoint.json").display(),
-            manifests_dir.join("lucid_manifest.helios.json").display(),
-        );
-        fs::write(&source, contents).expect("test models file should write");
-        Self::from_path(&source).expect("test models registry should load")
-    }
-}
-
-fn resolve_path(base_dir: &Path, raw_path: &str) -> PathBuf {
-    let candidate = PathBuf::from(raw_path.trim());
-    if candidate.is_absolute() {
-        candidate
-    } else {
-        base_dir.join(candidate)
+        Self {
+            models: vec![
+                RegisteredModel {
+                    id: "yume".to_string(),
+                    display_name: "Yume".to_string(),
+                    backend: ModelBackend::Modal(ModalBackend {
+                        dispatch_base_url: "https://yume.modal.test".to_string(),
+                        dispatch_token: "token-yume".to_string(),
+                        worker_id: "wm-yume".to_string(),
+                    }),
+                    timeouts: ModelTimeouts {
+                        startup_timeout_secs: 120,
+                        session_max_duration_secs: 3600,
+                        session_cancel_grace_secs: 30,
+                        worker_heartbeat_timeout_secs: 15,
+                    },
+                },
+                RegisteredModel {
+                    id: "waypoint".to_string(),
+                    display_name: "Waypoint".to_string(),
+                    backend: ModelBackend::Modal(ModalBackend {
+                        dispatch_base_url: "https://waypoint.modal.test".to_string(),
+                        dispatch_token: "token-waypoint".to_string(),
+                        worker_id: "wm-waypoint".to_string(),
+                    }),
+                    timeouts: ModelTimeouts {
+                        startup_timeout_secs: 900,
+                        session_max_duration_secs: 3600,
+                        session_cancel_grace_secs: 30,
+                        worker_heartbeat_timeout_secs: 15,
+                    },
+                },
+                RegisteredModel {
+                    id: "helios".to_string(),
+                    display_name: "Helios (Distilled)".to_string(),
+                    backend: ModelBackend::Modal(ModalBackend {
+                        dispatch_base_url: "https://helios.modal.test".to_string(),
+                        dispatch_token: "token-helios".to_string(),
+                        worker_id: "wm-helios".to_string(),
+                    }),
+                    timeouts: ModelTimeouts {
+                        startup_timeout_secs: 900,
+                        session_max_duration_secs: 3600,
+                        session_cancel_grace_secs: 30,
+                        worker_heartbeat_timeout_secs: 15,
+                    },
+                },
+            ],
+        }
     }
 }
 
@@ -299,28 +243,9 @@ mod tests {
         path
     }
 
-    fn manifest_json(model_name: &str) -> String {
-        format!(
-            r#"{{
-  "model": {{
-    "name": "{model_name}",
-    "description": "desc"
-  }},
-  "inputs": [],
-  "outputs": [
-    {{
-      "name": "main_video",
-      "kind": "video"
-    }}
-  ]
-}}"#
-        )
-    }
-
     #[test]
     fn valid_registry_loads() {
         let dir = temp_dir();
-        write_file(&dir, "contracts/yume.json", &manifest_json("yume"));
         let registry_path = write_file(
             &dir,
             "coordinator.models.json",
@@ -329,7 +254,6 @@ mod tests {
     {
       "id": "yume",
       "display_name": "Yume",
-      "manifest_path": "contracts/yume.json",
       "backend": {
         "kind": "modal",
         "dispatch_base_url": "https://yume.modal.run",
@@ -356,8 +280,6 @@ mod tests {
     #[test]
     fn duplicate_model_ids_fail() {
         let dir = temp_dir();
-        write_file(&dir, "contracts/a.json", &manifest_json("a"));
-        write_file(&dir, "contracts/b.json", &manifest_json("b"));
         let registry_path = write_file(
             &dir,
             "coordinator.models.json",
@@ -366,14 +288,12 @@ mod tests {
     {
       "id": "dup",
       "display_name": "First",
-      "manifest_path": "contracts/a.json",
       "backend": {"kind": "modal", "dispatch_base_url": "https://a", "dispatch_token": "a", "worker_id": "a"},
       "timeouts": {"startup_timeout_secs": 1, "session_max_duration_secs": 2, "session_cancel_grace_secs": 3, "worker_heartbeat_timeout_secs": 4}
     },
     {
       "id": "dup",
       "display_name": "Second",
-      "manifest_path": "contracts/b.json",
       "backend": {"kind": "modal", "dispatch_base_url": "https://b", "dispatch_token": "b", "worker_id": "b"},
       "timeouts": {"startup_timeout_secs": 1, "session_max_duration_secs": 2, "session_cancel_grace_secs": 3, "worker_heartbeat_timeout_secs": 4}
     }
@@ -386,34 +306,8 @@ mod tests {
     }
 
     #[test]
-    fn missing_manifest_path_fails() {
-        let dir = temp_dir();
-        let registry_path = write_file(
-            &dir,
-            "coordinator.models.json",
-            r#"{
-  "models": [
-    {
-      "id": "yume",
-      "display_name": "Yume",
-      "manifest_path": "contracts/missing.json",
-      "backend": {"kind": "modal", "dispatch_base_url": "https://yume", "dispatch_token": "token", "worker_id": "worker"},
-      "timeouts": {"startup_timeout_secs": 1, "session_max_duration_secs": 2, "session_cancel_grace_secs": 3, "worker_heartbeat_timeout_secs": 4}
-    }
-  ]
-}"#,
-        );
-
-        let err = ModelRegistry::from_path(&registry_path).expect_err("registry should fail");
-        assert!(
-            matches!(err, RegistryError::Manifest(message) if message.contains("failed reading manifest"))
-        );
-    }
-
-    #[test]
     fn unsupported_backend_kind_fails() {
         let dir = temp_dir();
-        write_file(&dir, "contracts/yume.json", &manifest_json("yume"));
         let registry_path = write_file(
             &dir,
             "coordinator.models.json",
@@ -422,7 +316,6 @@ mod tests {
     {
       "id": "yume",
       "display_name": "Yume",
-      "manifest_path": "contracts/yume.json",
       "backend": {"kind": "ec2"},
       "timeouts": {"startup_timeout_secs": 1, "session_max_duration_secs": 2, "session_cancel_grace_secs": 3, "worker_heartbeat_timeout_secs": 4}
     }

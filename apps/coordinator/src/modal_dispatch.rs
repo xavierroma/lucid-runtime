@@ -7,6 +7,7 @@ use uuid::Uuid;
 pub const LAUNCH_ENDPOINT: &str = "/launch";
 pub const CANCEL_ENDPOINT: &str = "/cancel";
 pub const STATUS_ENDPOINT: &str = "/status";
+pub const MANIFEST_ENDPOINT: &str = "/manifest";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -77,6 +78,7 @@ pub trait ModalDispatch: Send + Sync {
         &self,
         function_call_id: &str,
     ) -> Result<ModalExecutionStatus, ModalDispatchError>;
+    async fn get_manifest(&self) -> Result<serde_json::Value, ModalDispatchError>;
 }
 
 #[derive(Clone)]
@@ -168,6 +170,24 @@ impl ModalDispatch for HttpModalDispatchClient {
                 .await
                 .map_err(|err| ModalDispatchError::Decode(err.to_string()))?;
             return Ok(parsed.status);
+        }
+        Err(parse_error(response).await)
+    }
+
+    async fn get_manifest(&self) -> Result<serde_json::Value, ModalDispatchError> {
+        let url = format!("{}{}", self.base_url, MANIFEST_ENDPOINT);
+        let response = self
+            .client
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|err| ModalDispatchError::Transport(err.to_string()))?;
+        if response.status().is_success() {
+            return response
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|err| ModalDispatchError::Decode(err.to_string()));
         }
         Err(parse_error(response).await)
     }
