@@ -451,17 +451,11 @@ class _RealLiveKitTransport:
                 chunks.append(chunk)
                 total_size += len(chunk)
                 digest.update(chunk)
-            expected_size = getattr(info, "size", None)
-            if expected_size is not None and int(expected_size) != total_size:
-                raise ValueError(f"size mismatch for {stream_id}: {total_size} != {expected_size}")
             expected_sha256 = str(attributes.get("sha256", "") or "").strip().lower()
             actual_sha256 = digest.hexdigest()
             if expected_sha256 and expected_sha256 != actual_sha256:
                 raise ValueError(f"sha256 mismatch for {stream_id}")
             slot = _coerce_input_file_slot(attributes)
-            previous_upload_id = self._latest_upload_by_slot.get(slot)
-            if previous_upload_id and previous_upload_id != self._active_upload_by_slot.get(slot):
-                self._drop_input_file(previous_upload_id)
             self._input_files[stream_id] = InputFile(
                 id=stream_id,
                 filename=str(getattr(info, "name", "upload.bin") or "upload.bin"),
@@ -471,6 +465,9 @@ class _RealLiveKitTransport:
                 data=b"".join(chunks),
             )
             self._input_file_slots[stream_id] = slot
+            previous_upload_id = self._latest_upload_by_slot.get(slot)
+            if previous_upload_id and previous_upload_id != self._active_upload_by_slot.get(slot):
+                self._drop_input_file(previous_upload_id)
             self._latest_upload_by_slot[slot] = stream_id
             await self._emit_upload_status("upload_ready", {"upload_id": stream_id})
         except asyncio.CancelledError:

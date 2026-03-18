@@ -286,7 +286,7 @@ export class LucidSessionClient<
     const sha256 = await sha256Hex(buffer)
     const uploadRequest: UploadRequest = {
       name: options?.name ?? file.name ?? "upload.bin",
-      size: file.size,
+      size: buffer.byteLength,
       mimeType: options?.mimeType ?? file.type ?? "application/octet-stream",
       topic: options?.topic ?? this.#inputFileTopic,
       attributes: {
