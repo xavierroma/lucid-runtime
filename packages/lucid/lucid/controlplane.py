@@ -10,7 +10,6 @@ __all__ = [
     "CoordinatorClient",
     "CoordinatorError",
     "CoordinatorNotFoundError",
-    "NoopSessionLifecycleReporter",
     "SessionLifecycleReporter",
 ]
 
@@ -27,33 +26,6 @@ class SessionLifecycleReporter(Protocol):
         end_reason: str | None = None,
     ) -> None: ...
     async def close(self) -> None: ...
-
-
-class NoopSessionLifecycleReporter:
-    async def ready(self, session_id: str) -> None:
-        _ = session_id
-
-    async def running(self, session_id: str) -> None:
-        _ = session_id
-
-    async def paused(self, session_id: str) -> None:
-        _ = session_id
-
-    async def heartbeat(self, session_id: str) -> None:
-        _ = session_id
-
-    async def ended(
-        self,
-        session_id: str,
-        error_code: str | None,
-        end_reason: str | None = None,
-    ) -> None:
-        _ = session_id
-        _ = error_code
-        _ = end_reason
-
-    async def close(self) -> None:
-        return None
 
 
 class CoordinatorError(RuntimeError):
