@@ -59,18 +59,12 @@ impl AppContext {
 fn build_worker_store(config: &Config) -> Arc<dyn WorkerStore> {
     let store = InMemoryWorkerStore::new();
     for model in config.model_registry.models() {
-        let (dispatch_base_url, dispatch_token, worker_id) = match &model.backend {
-            ModelBackend::Modal(backend) => (
-                backend.dispatch_base_url.clone(),
-                backend.dispatch_token.clone(),
-                backend.worker_id.clone(),
-            ),
+        let worker_id = match &model.backend {
+            ModelBackend::Modal(backend) => backend.worker_id.clone(),
         };
         store.save(RegisteredWorker {
             model_id: model.id.clone(),
             display_name: model.display_name.clone(),
-            dispatch_base_url,
-            dispatch_token,
             worker_id,
             timeouts: model.timeouts.clone(),
         });
@@ -302,7 +296,7 @@ mod tests {
         },
         models::{ModelsResponse, SessionEndReason, SessionResponse, SessionState},
         reconcile_runtime,
-        sessions::store::{room_name_for, SessionUpdate},
+        sessions::store::room_name_for,
         AppContext,
     };
 
@@ -1176,9 +1170,4 @@ mod tests {
         assert_eq!(heartbeat.status(), StatusCode::UNAUTHORIZED);
     }
 
-    #[allow(dead_code)]
-    fn _uses_session_update() {
-        // Suppress "unused import" warnings for SessionUpdate imported at the top.
-        let _ = SessionUpdate::default();
-    }
 }

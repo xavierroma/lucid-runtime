@@ -6,8 +6,6 @@ use crate::registry::ModelTimeouts;
 pub struct RegisteredWorker {
     pub model_id: String,
     pub display_name: String,
-    pub dispatch_base_url: String,
-    pub dispatch_token: String,
     pub worker_id: String,
     pub timeouts: ModelTimeouts,
 }
