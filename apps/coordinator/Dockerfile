@@ -6,7 +6,6 @@ ENV CARGO_TARGET_DIR=/workspace/target
 COPY Cargo.lock apps/coordinator/Cargo.lock
 COPY apps/coordinator/Cargo.toml apps/coordinator/Cargo.toml
 COPY apps/coordinator/src apps/coordinator/src
-COPY packages/contracts/generated packages/contracts/generated
 
 RUN cargo build --locked --manifest-path apps/coordinator/Cargo.toml --release
 
@@ -15,7 +14,6 @@ FROM debian:bookworm-slim
 RUN useradd --create-home --uid 10001 appuser
 
 COPY --from=builder /workspace/target/release/coordinator /usr/local/bin/coordinator
-COPY --from=builder /workspace/packages/contracts/generated /opt/lucid/contracts/generated
 
 RUN mkdir -p /app/config && chown -R appuser:appuser /app /opt/lucid
 
