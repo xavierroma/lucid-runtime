@@ -26,7 +26,6 @@ import {
   getSession,
   isTerminalSessionState,
   type Capabilities,
-  type LucidManifest,
   type SupportedModel,
   type SessionResponse,
 } from "@/lib/coordinator"
@@ -40,13 +39,9 @@ import {
   persistSelectedEnvironmentId,
   type SavedEnvironment,
 } from "@/lib/environments"
-import { lucidManifest as heliosManifest } from "@/lib/generated/lucid.helios"
-import { lucidManifest as defaultManifest } from "@/lib/generated/lucid"
-import { lucidManifest as waypointManifest } from "@/lib/generated/lucid.waypoint"
 import {
   findInitialFrameInput,
   findPromptInput,
-  manifestForModel,
 } from "@/lib/lucid"
 import { dataUrlToFile } from "@/lib/input-files"
 
@@ -56,12 +51,6 @@ interface DisplayStatus {
   label: string
   detail: string
   tone: DisplayTone
-}
-
-const STATIC_MANIFESTS: Record<string, LucidManifest> = {
-  helios: heliosManifest as unknown as LucidManifest,
-  waypoint: waypointManifest as unknown as LucidManifest,
-  yume: defaultManifest as unknown as LucidManifest,
 }
 
 function hasPromptInput(capabilities: Capabilities | null) {
@@ -283,10 +272,7 @@ export function App() {
     normalizeModelId(capabilities?.manifest.model.name) ??
     selectedModel
   const promptSupported = hasPromptInput(capabilities)
-  const activeManifest = useMemo(
-    () => manifestForModel(selectedModel, capabilities?.manifest ?? null, STATIC_MANIFESTS),
-    [capabilities?.manifest, selectedModel],
-  )
+  const activeManifest = capabilities?.manifest ?? null
   const initialFrameInput = useMemo(
     () => findInitialFrameInput(activeManifest?.inputs ?? []),
     [activeManifest],
