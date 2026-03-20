@@ -29,3 +29,6 @@ dist/
 
 # Tilt
 .tilt_modules/
+
+# Sensitive config files
+apps/coordinator/coordinator.models.json
