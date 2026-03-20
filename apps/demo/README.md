@@ -9,8 +9,7 @@ Copy [`.env.example`](/Users/xavierroma/projects/lucid-runtime/apps/demo/.env.ex
 `.env` and set:
 
 - `VITE_LIVEKIT_URL`: same LiveKit URL used by the coordinator and Modal worker
-- `VITE_DEFAULT_MODEL`: `yume` or `waypoint`; this should match the deployed coordinator and
-  Modal worker
+- `VITE_DEFAULT_MODEL`: model id matching what is deployed in the coordinator and Modal worker (e.g. `waypoint`)
 
 For local development, prefer the Vite proxy:
 
@@ -48,8 +47,6 @@ bun run dev
 - While `RUNNING`, the toolbar pause control sends `pause`; while `PAUSED`, it sends `resume`.
 - While `PAUSED`, prompt updates plus hold/axis inputs still flow, while press/pointer/wheel
   inputs are dropped.
-- When Waypoint is active, the demo mounts its control deck after the session becomes live and
-  keeps transient look/scroll controls disabled while paused.
 
 ## Build
 

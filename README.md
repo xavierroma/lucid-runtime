@@ -74,11 +74,6 @@ The main Python package. It owns the authoring contract and the runtime adapters
   - Modal adapter and CLI: app wiring, dispatch API helpers, runtime config loading, and worker
     launch/cancel helpers.
 
-### `packages/contracts`
-
-Generated manifests consumed by the coordinator and demo. These are the serialized Lucid model
-contracts, not handwritten app code.
-
 ## Apps
 
 ### `apps/coordinator`
@@ -115,13 +110,5 @@ model-specific code outside the library and uses Lucid only for the runtime cont
 
 Waypoint model port with a Modal worker, coordinator integration, and demo flow. Start here if
 you want the most complete end-to-end example. See
-[examples/waypoint_modal/README.md](/Users/xavierroma/projects/lucid-runtime/examples/waypoint_modal/README.md)
+[examples/waypoint_modal/README.md](examples/waypoint_modal/README.md)
 for the full local run sequence.
-
-### `examples/helios_modal`
-
-Helios distilled image model port. Good reference for a smaller Modal-backed model setup.
-
-### `examples/yume_modal`
-
-Yume model port with tests that focus on engine/runtime behavior.

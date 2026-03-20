@@ -83,16 +83,12 @@ For debugging a `device-side assert`, set `CUDA_LAUNCH_BLOCKING=1` in the env fi
 After `uv run lucid-modal deploy --env-file .env.waypoint`, run the local coordinator, expose it to the Modal worker with ngrok, and start the demo:
 
 ```bash
-sed "s#/opt/lucid/contracts/generated#$(pwd)/packages/contracts/generated#g" \
-  apps/coordinator/coordinator.models.json \
-  > /tmp/lucid-coordinator.models.local.json
-
 ngrok http 8080
 
 set -a
 source apps/coordinator/.env
 export COORDINATOR_CALLBACK_BASE_URL=https://YOUR-NGROK-URL.ngrok-free.app
-export COORDINATOR_MODELS_FILE=/tmp/lucid-coordinator.models.local.json
+export COORDINATOR_MODELS_FILE=apps/coordinator/coordinator.models.json
 export COORDINATOR_BIND_ADDR=127.0.0.1:8080
 set +a
 cargo run --manifest-path apps/coordinator/Cargo.toml

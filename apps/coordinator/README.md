@@ -56,7 +56,6 @@ Optional environment variables:
 
 - `id`
 - `display_name`
-- `manifest_path`
 - `backend`
 - `timeouts`
 
