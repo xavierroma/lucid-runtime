@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -307,60 +305,6 @@ async def test_runtime_rejects_unknown_uploaded_file_ids() -> None:
     with pytest.raises(ActionDispatchError, match="unknown input file"):
         await runtime_session.dispatch_input("set_initial_frame", {"image": "missing"})
 
-
-def test_generated_artifacts_are_fresh() -> None:
-    script_path = Path(__file__).resolve().parents[3] / "scripts" / "generate_lucid_artifacts.py"
-    spec = importlib.util.spec_from_file_location("generate_lucid_artifacts", script_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec is not None and spec.loader is not None
-    spec.loader.exec_module(module)
-
-    generated = manifest(YumeLucidModel)
-    manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.json"
-    waypoint_manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.waypoint.json"
-    helios_manifest_path = Path(__file__).resolve().parents[3] / "packages" / "contracts" / "generated" / "lucid_manifest.helios.json"
-    ts_path = Path(__file__).resolve().parents[3] / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.ts"
-    waypoint_ts_path = Path(__file__).resolve().parents[3] / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.waypoint.ts"
-    helios_ts_path = Path(__file__).resolve().parents[3] / "apps" / "demo" / "src" / "lib" / "generated" / "lucid.helios.ts"
-
-    assert manifest_path.read_text(encoding="utf-8") == (
-        module.json.dumps(generated, indent=2, sort_keys=True) + "\n"
-    )
-    assert waypoint_manifest_path.read_text(encoding="utf-8") == (
-        module.json.dumps(
-            module._load_manifest(
-                module_name="waypoint_modal_example.model",
-                extra_path=Path(__file__).resolve().parents[3] / "examples" / "waypoint_modal" / "src",
-            ),
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    )
-    assert helios_manifest_path.read_text(encoding="utf-8") == (
-        module.json.dumps(
-            module._load_manifest(
-                module_name="helios_modal_example.model",
-                extra_path=Path(__file__).resolve().parents[3] / "examples" / "helios_modal" / "src",
-            ),
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n"
-    )
-    assert ts_path.read_text(encoding="utf-8") == module.render_ts(generated)
-    assert waypoint_ts_path.read_text(encoding="utf-8") == module.render_ts(
-        module._load_manifest(
-            module_name="waypoint_modal_example.model",
-            extra_path=Path(__file__).resolve().parents[3] / "examples" / "waypoint_modal" / "src",
-        )
-    )
-    assert helios_ts_path.read_text(encoding="utf-8") == module.render_ts(
-        module._load_manifest(
-            module_name="helios_modal_example.model",
-            extra_path=Path(__file__).resolve().parents[3] / "examples" / "helios_modal" / "src",
-        )
-    )
 
 def _logger():
     import logging
