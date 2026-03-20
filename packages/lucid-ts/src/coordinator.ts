@@ -73,10 +73,6 @@ export class CoordinatorClient {
   }
 }
 
-export function createCoordinatorClient(options: CoordinatorClientOptions) {
-  return new CoordinatorClient(options)
-}
-
 async function parseError(response: Response) {
   try {
     const payload = (await response.json()) as ErrorResponse

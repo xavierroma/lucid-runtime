@@ -778,7 +778,6 @@ export function App() {
             <EnvironmentStudio
               key={studioKey}
               environments={environments}
-              selectedEnvironmentId={selectedEnvironmentId}
               initialEditingId={studioInitialId}
               onSaveEnvironment={handleSaveEnvironment}
               onDeleteEnvironment={handleDeleteEnvironment}

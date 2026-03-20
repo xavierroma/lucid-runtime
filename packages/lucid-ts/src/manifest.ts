@@ -1,24 +1,9 @@
 import type {
   InputBinding,
-  LucidManifest,
   ManifestInput,
   UploadFieldConfig,
   UploadInputSpec,
 } from "./types.js"
-
-export function manifestForModel(
-  modelId: string | null,
-  capabilitiesManifest: LucidManifest | null,
-  staticManifests: Record<string, LucidManifest>,
-) {
-  if (capabilitiesManifest) {
-    return capabilitiesManifest
-  }
-  if (!modelId) {
-    return null
-  }
-  return staticManifests[modelId] ?? null
-}
 
 export function findInputByName(
   inputs: ManifestInput[] | readonly ManifestInput[],
@@ -59,7 +44,7 @@ export function findUploadedFileInput(inputs: ManifestInput[] | readonly Manifes
   return findUploadedFileInputs(inputs)[0] ?? null
 }
 
-export function findUploadedFileInputs(inputs: ManifestInput[] | readonly ManifestInput[]) {
+function findUploadedFileInputs(inputs: ManifestInput[] | readonly ManifestInput[]) {
   const uploaded: UploadInputSpec[] = []
   for (const input of inputs) {
     if (input.binding) {
@@ -86,18 +71,14 @@ export function findUploadedFileInputs(inputs: ManifestInput[] | readonly Manife
   return uploaded
 }
 
-export function uploadAcceptAttribute(upload: UploadFieldConfig) {
-  return upload.mime_types.join(",")
-}
-
-export function inputProperties(input: ManifestInput) {
+function inputProperties(input: ManifestInput) {
   const schema = input.args_schema as {
     properties?: Record<string, Record<string, unknown> | undefined>
   }
   return schema.properties ?? {}
 }
 
-export function isStringWireField(schema: Record<string, unknown> | undefined) {
+function isStringWireField(schema: Record<string, unknown> | undefined) {
   if (!schema) {
     return false
   }
@@ -108,7 +89,7 @@ export function isStringWireField(schema: Record<string, unknown> | undefined) {
   return Array.isArray(schemaType) && schemaType.includes("string")
 }
 
-export function parseUploadField(value: unknown): UploadFieldConfig | null {
+function parseUploadField(value: unknown): UploadFieldConfig | null {
   if (!value || typeof value !== "object") {
     return null
   }

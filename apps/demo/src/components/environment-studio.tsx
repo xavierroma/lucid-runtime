@@ -18,7 +18,6 @@ export interface SaveEnvironmentInput {
 
 interface EnvironmentStudioProps {
   environments: SavedEnvironment[]
-  selectedEnvironmentId: string | null
   initialEditingId?: string | null
   onSaveEnvironment: (input: SaveEnvironmentInput) => SavedEnvironment
   onDeleteEnvironment: (environmentId: string) => void
